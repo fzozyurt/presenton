@@ -1,7 +1,12 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import JSONResponse
 
+from identity.provider import is_oidc_enabled
+from identity.service import get_user_by_id, user_to_profile
+from identity.tokens import get_oidc_session_token_from_request, validate_oidc_session_token
+from services.database import get_async_session
 from utils.simple_auth import (
     clear_session_cookie,
     create_session_token,
@@ -24,9 +29,29 @@ class AuthCredentialsRequest(BaseModel):
 
 
 @API_V1_AUTH_ROUTER.get("/status")
-async def get_status(request: Request):
+async def get_status(request: Request, session: AsyncSession = Depends(get_async_session)):
     if is_disable_auth_enabled():
         return {"configured": True, "authenticated": True, "username": "electron"}
+
+    if is_oidc_enabled():
+        token = get_oidc_session_token_from_request(request)
+        payload = validate_oidc_session_token(token)
+        if payload is not None:
+            user = await get_user_by_id(session, payload["uid"])
+            profile = user_to_profile(user) if user else None
+            return {
+                "provider": "oidc",
+                "configured": True,
+                "authenticated": True,
+                "user": profile.model_dump() if profile else None,
+            }
+        return {
+            "provider": "oidc",
+            "configured": True,
+            "authenticated": False,
+            "user": None,
+        }
+
     token = get_session_token_from_request(request)
     return get_auth_status(token)
 

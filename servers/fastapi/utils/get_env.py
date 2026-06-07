@@ -321,6 +321,34 @@ def get_migrate_database_on_startup_env():
     return os.getenv("MIGRATE_DATABASE_ON_STARTUP")
 
 
+def get_oidc_enabled_env():
+    return os.getenv("OIDC_ENABLED")
+
+
+def get_oidc_issuer_env():
+    return os.getenv("OIDC_ISSUER")
+
+
+def get_oidc_client_id_env():
+    return os.getenv("OIDC_CLIENT_ID")
+
+
+def get_oidc_client_secret_env():
+    return os.getenv("OIDC_CLIENT_SECRET")
+
+
+def get_oidc_redirect_uri_env():
+    return os.getenv("OIDC_REDIRECT_URI")
+
+
+def get_oidc_scopes_env():
+    return os.getenv("OIDC_SCOPES")
+
+
+def get_workspace_mode_env():
+    return os.getenv("WORKSPACE_MODE")
+
+
 def get_sentry_dsn_env():
     return os.getenv("SENTRY_DSN")
 

@@ -12,6 +12,7 @@ from api.v1.auth.router import API_V1_AUTH_ROUTER
 from api.v1.mock.router import API_V1_MOCK_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
 from api.v1.webhook.router import API_V1_WEBHOOK_ROUTER
+from identity.provider import is_oidc_enabled
 from utils.get_env import (
     get_app_data_directory_env,
     get_sentry_dsn_env,
@@ -62,6 +63,12 @@ app.include_router(API_V1_WEBHOOK_ROUTER)
 app.include_router(API_V1_MOCK_ROUTER)
 app.include_router(API_V1_AUTH_ROUTER)
 
+if is_oidc_enabled():
+    from api.v1.oidc_router import OIDC_ROUTER
+    from api.v1.projects_router import PROJECTS_ROUTER
+    app.include_router(OIDC_ROUTER)
+    app.include_router(PROJECTS_ROUTER)
+
 # Mount app_data and static assets (direct FastAPI access; nginx also serves /static in Docker).
 app_data_dir = get_app_data_directory_env()
 if app_data_dir:
@@ -83,7 +90,12 @@ app.add_middleware(
 )
 
 app.add_middleware(UserConfigEnvUpdateMiddleware)
-app.add_middleware(SessionAuthMiddleware)
+
+if is_oidc_enabled():
+    from identity.session_middleware import OIDCSessionMiddleware
+    app.add_middleware(OIDCSessionMiddleware)
+else:
+    app.add_middleware(SessionAuthMiddleware)
 
 
 @app.middleware("http")

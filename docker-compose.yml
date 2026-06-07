@@ -95,6 +95,13 @@ services:
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
       - RESET_AUTH=${RESET_AUTH:-}
+      - OIDC_ENABLED=${OIDC_ENABLED:-false}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
+      - WORKSPACE_MODE=${WORKSPACE_MODE:-single}
 
   production-gpu:
     # image: ghcr.io/presenton/presenton:latest
@@ -197,6 +204,13 @@ services:
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
       - RESET_AUTH=${RESET_AUTH:-}
+      - OIDC_ENABLED=${OIDC_ENABLED:-false}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
+      - WORKSPACE_MODE=${WORKSPACE_MODE:-single}
 
   development:
     build:
@@ -295,6 +309,13 @@ services:
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
       - RESET_AUTH=${RESET_AUTH:-}
+      - OIDC_ENABLED=${OIDC_ENABLED:-false}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
+      - WORKSPACE_MODE=${WORKSPACE_MODE:-single}
 
   development-gpu:
     build:
@@ -398,6 +419,13 @@ services:
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
       - RESET_AUTH=${RESET_AUTH:-}
+      - OIDC_ENABLED=${OIDC_ENABLED:-false}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
+      - WORKSPACE_MODE=${WORKSPACE_MODE:-single}
 
 volumes:
   presenton_root_node_modules:

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, ForeignKey
 from sqlmodel import Field, SQLModel
 
 from utils.datetime_utils import get_current_utc_datetime
@@ -24,4 +24,10 @@ class TemplateModel(SQLModel, table=True):
         sa_column=Column(
             DateTime(timezone=True), nullable=False, default=get_current_utc_datetime
         ),
+    )
+    workspace_id: Optional[uuid.UUID] = Field(
+        sa_column=Column(ForeignKey("workspaces.id", ondelete="SET NULL"), index=True, nullable=True)
+    )
+    created_by: Optional[uuid.UUID] = Field(
+        sa_column=Column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
     )

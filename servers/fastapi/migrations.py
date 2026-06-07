@@ -92,6 +92,8 @@ def _repair_orphan_alembic_revision(config: Config, database_url: str) -> None:
 
 def _infer_revision_from_schema(inspector, tables: set[str], head_revision: str) -> str:
     """Best-effort: map existing SQLite/Postgres schema to our linear migration chain."""
+    if "workspaces" in tables or "users" in tables:
+        return head_revision
     if "chat_history_messages" in tables:
         return head_revision
     if "template_create_infos" in tables:

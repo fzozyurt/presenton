@@ -10,6 +10,14 @@ type AuthStatus = {
   configured: boolean;
   authenticated: boolean;
   username: string | null;
+  provider?: string;
+  user?: {
+    id: string;
+    email: string;
+    name: string;
+    avatar_url: string | null;
+    is_admin: boolean;
+  } | null;
 };
 
 const initialStatus: AuthStatus = {
@@ -31,6 +39,14 @@ export default function AuthGate() {
   useEffect(() => {
     void refreshStatus();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || isLoading) return;
+    if ((status as any).provider === "oidc" && !status.authenticated) {
+      window.location.href = getApiUrl("/api/v1/oidc/login");
+      return;
+    }
+  }, [isLoading, status.configured, status.authenticated, (status as any).provider]);
 
   useEffect(() => {
     if (
@@ -76,11 +92,13 @@ export default function AuthGate() {
         throw new Error("Could not load login state");
       }
 
-      const data = (await response.json()) as AuthStatus;
+      const data = (await response.json()) as AuthStatus & { provider?: string; user?: AuthStatus["user"] };
       setStatus({
         configured: Boolean(data.configured),
         authenticated: Boolean(data.authenticated),
         username: data.username ?? null,
+        provider: data.provider,
+        user: data.user ?? null,
       });
     } catch (fetchError) {
       console.error(fetchError);

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 import uuid
-from sqlalchemy import JSON, Column, DateTime, String
+from sqlalchemy import JSON, Column, DateTime, String, ForeignKey
 from sqlmodel import Boolean, Field, SQLModel
 
 from models.presentation_outline_model import PresentationOutlineModel
@@ -42,6 +42,12 @@ class PresentationModel(SQLModel, table=True):
     include_title_slide: bool = Field(sa_column=Column(Boolean), default=True)
     web_search: bool = Field(sa_column=Column(Boolean), default=False)
     theme: Optional[dict] = Field(sa_column=Column(JSON), default=None)
+    workspace_id: Optional[uuid.UUID] = Field(
+        sa_column=Column(ForeignKey("workspaces.id", ondelete="SET NULL"), index=True, nullable=True)
+    )
+    created_by: Optional[uuid.UUID] = Field(
+        sa_column=Column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
+    )
 
     def get_new_presentation(self):
         return PresentationModel(

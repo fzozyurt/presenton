@@ -58,6 +58,7 @@ async function getAuthStatus(request: NextRequest): Promise<AuthStatus> {
 function isApiAuthExempt(pathname: string): boolean {
   return (
     pathname.startsWith("/api/v1/auth/") ||
+    pathname.startsWith("/api/v1/oidc/") ||
     pathname === "/api/telemetry-status" ||
     /** FastAPI `get_layout_by_name` fallback (no browser cookie in Docker). */
     pathname === "/api/template" ||

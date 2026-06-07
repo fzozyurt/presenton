@@ -45,6 +45,9 @@ include = [
     "constants*",
     "utils*",
     "templates*",
+    "identity*",
+    "access_control*",
+    "workspaces*",
 ]
 
 [dependency-groups]
