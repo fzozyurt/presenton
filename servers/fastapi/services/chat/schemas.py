@@ -163,6 +163,36 @@ class CustomThemeInput(OpenAIStrictSchemaModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
 
+class FetchExternalDataInput(OpenAIStrictSchemaModel):
+    """Query external data sources (Grafana dashboards, D databases, metrics APIs, etc.).
+
+    The server fetches raw data and returns it for the LLM to process, summarize,
+    and place into presentation slides. Supported sources are configured server-side.
+    """
+
+    source: Literal["grafana", "d_database", "prometheus", "custom_http", "rest"] = Field(
+        ...,
+        description="Data source identifier (grafana, rest, d_database, prometheus, custom_http).",
+    )
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description=(
+            "For grafana: dashboard UID + optional panel id & time range in natural language. "
+            "For d_database: SQL query or qSQL expression. "
+            "For prometheus: PromQL query. "
+            "For custom_http: full HTTP endpoint path (configured server-side)."
+        ),
+    )
+    limit: int | None = Field(
+        ...,
+        ge=1,
+        le=500,
+        description="Max rows/points to return (defaults to 50).",
+    )
+
+
 class SetPresentationThemeInput(OpenAIStrictSchemaModel):
     theme: str | None = Field(
         ...,
@@ -200,3 +230,92 @@ class SetPresentationThemeInput(OpenAIStrictSchemaModel):
         if self.theme is None and self.custom_theme is None:
             raise ValueError("Either 'theme' or 'customTheme' must be provided.")
         return self
+
+
+class AnalyzeExternalDataInput(OpenAIStrictSchemaModel):
+    """Request deeper statistical analysis of previously fetched external data."""
+
+    source: Literal["grafana", "d_database", "prometheus", "custom_http", "rest"] = Field(
+        ..., description="Data source identifier matching the fetchExternalData call."
+    )
+    query: str = Field(
+        ..., min_length=1, max_length=2000,
+        description="Same query used in fetchExternalData for context."
+    )
+    focus: str | None = Field(
+        None, min_length=1, max_length=500,
+        description="Optional: what aspect to focus analysis on (e.g. 'trends', 'anomalies', 'distribution')."
+    )
+
+
+class SuggestChartInput(OpenAIStrictSchemaModel):
+    """Request chart type recommendation for a dataset."""
+
+    data_kind: str = Field(
+        ..., min_length=1, max_length=64,
+        description="The DataKind of the dataset (time_series, categorical, table, etc.)."
+    )
+    description: str | None = Field(
+        None, min_length=1, max_length=500,
+        description="Optional description of the data for better recommendations."
+    )
+    available_chart_types: list[str] | None = Field(
+        None, max_length=30,
+        description="List of chart types available in the current template layout."
+    )
+
+
+class ListDataSourcesInput(NoArgsInput):
+    """List available external data sources and their capabilities."""
+    pass
+
+
+class ValidateExternalDataInput(OpenAIStrictSchemaModel):
+    """Validate fetched external data using ML models for quality assessment.
+
+    After fetchExternalData returns data, call this to get ML model opinions
+    on data quality, anomaly confidence, and whether the data looks reliable.
+    The LLM should review the validation output and decide whether to trust
+    the data before placing it into slides.
+    """
+
+    source: Literal["grafana", "d_database", "prometheus", "custom_http", "rest"] = Field(
+        ..., description="Same source used in fetchExternalData."
+    )
+    query: str = Field(
+        ..., min_length=1, max_length=2000,
+        description="Same query used in fetchExternalData for traceability."
+    )
+    model_names: list[str] | None = Field(
+        None, max_length=10,
+        description="Specific ML models to run. Omit for auto-selection based on data characteristics."
+    )
+    focus: str | None = Field(
+        None, min_length=1, max_length=100,
+        description="Analysis focus: 'anomalies', 'trends', 'distribution', or omit for full analysis."
+    )
+
+
+class RunMLModelInput(OpenAIStrictSchemaModel):
+    """Run a specific ML model on previously fetched data.
+
+    Use this after listMLModels to pick the right model for the data.
+    Each model has a specific purpose (anomaly detection, trend analysis, etc.).
+    """
+
+    source: Literal["grafana", "d_database", "prometheus", "custom_http", "rest"] = Field(
+        ..., description="Same source used in fetchExternalData."
+    )
+    query: str = Field(
+        ..., min_length=1, max_length=2000,
+        description="Same query used in fetchExternalData for traceability."
+    )
+    model_name: str = Field(
+        ..., min_length=1, max_length=100,
+        description="ML model name from listMLModels catalog (e.g. 'zscore_anomaly', 'trend_detection')."
+    )
+
+
+class ListMLModelsInput(NoArgsInput):
+    """List available ML models with their descriptions and capabilities."""
+    pass

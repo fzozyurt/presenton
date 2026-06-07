@@ -7,16 +7,23 @@ import dirtyjson  # type: ignore[import-untyped]
 from llmai.shared import AssistantToolCall, Tool  # type: ignore[import-not-found]
 
 from services.chat.schemas import (
+    AnalyzeExternalDataInput,
     DeleteSlideInput,
+    FetchExternalDataInput,
     GenerateAssetsInput,
     GenerateIconInput,
     GenerateImageInput,
     GetContentSchemaFromLayoutIdInput,
     GetSlideAtIndexInput,
+    ListDataSourcesInput,
+    ListMLModelsInput,
     NoArgsInput,
+    RunMLModelInput,
     SaveSlideInput,
     SearchSlidesInput,
     SetPresentationThemeInput,
+    SuggestChartInput,
+    ValidateExternalDataInput,
 )
 from services.chat.presentation_context_store import PresentationContextStore
 
@@ -41,6 +48,13 @@ class ChatTools:
             "saveSlide": self._save_slide,
             "deleteSlide": self._delete_slide,
             "setPresentationTheme": self._set_presentation_theme,
+            "fetchExternalData": self._fetch_external_data,
+            "analyzeExternalData": self._analyze_external_data,
+            "validateExternalData": self._validate_external_data,
+            "runMLModel": self._run_ml_model,
+            "suggestChart": self._suggest_chart,
+            "listDataSources": self._list_data_sources,
+            "listMLModels": self._list_ml_models,
         }
 
     def get_tool_definitions(self) -> list[Tool]:
@@ -151,6 +165,94 @@ class ChatTools:
                     "Only use this when the user explicitly asks to change/apply/switch theme."
                 ),
                 schema=SetPresentationThemeInput,
+                strict=True,
+            ),
+            Tool(
+                name="fetchExternalData",
+                description=(
+                    "Query external data sources (Grafana dashboards, D databases, Prometheus, "
+                    "custom HTTP APIs) to fetch metrics, time-series, or structured data. "
+                    "Use this when the user asks for live data, dashboards, charts, "
+                    "or any data from external monitoring/business systems. "
+                    "The returned data is raw — you MUST analyze, summarize trends, "
+                    "flag anomalies (threshold breaches), and format insights before "
+                    "placing them into slide content. Always call this BEFORE saveSlide "
+                    "when data is needed for the slide. "
+                    "For Grafana: pass dashboard UID or panel description as query. "
+                    "For D: pass SQL or qSQL. "
+                    "For Prometheus: pass a PromQL query. "
+                    "For custom_http/rest: pass the endpoint path."
+                ),
+                schema=FetchExternalDataInput,
+                strict=True,
+            ),
+            Tool(
+                name="analyzeExternalData",
+                description=(
+                    "Run deeper ML-powered statistical analysis on previously fetched external data. "
+                    "Use after fetchExternalData to get Z-score anomalies, IQR outliers, trend detection, "
+                    "and full statistical profiles. Focus options: 'trends', 'anomalies', 'distribution', "
+                    "or omit for full analysis. Results include ML model findings ready for slide content."
+                ),
+                schema=AnalyzeExternalDataInput,
+                strict=True,
+            ),
+            Tool(
+                name="suggestChart",
+                description=(
+                    "Get chart type recommendations based on data characteristics. "
+                    "Takes a DataKind value and optional constraint list of available chart types. "
+                    "Returns the best chart type match with alternatives. Useful before choosing "
+                    "a slide layout for data visualization."
+                ),
+                schema=SuggestChartInput,
+                strict=True,
+            ),
+            Tool(
+                name="listDataSources",
+                description=(
+                    "List all available external data sources registered in the integration layer. "
+                    "Shows which adapters are active (grafana, rest, etc.) and their capabilities. "
+                    "Use when the user asks what data sources are available."
+                ),
+                schema=ListDataSourcesInput,
+                strict=True,
+            ),
+            Tool(
+                name="validateExternalData",
+                description=(
+                    "Run ML-powered validation on previously fetched external data. "
+                    "Use after fetchExternalData to get quality assessment: anomaly confidence "
+                    "scores, distribution checks, trend validation. The output includes "
+                    "a 'verdict' field (valid/suspect/inconclusive) and 'quality_issues' "
+                    "array that helps you judge whether the data is reliable. "
+                    "ALWAYS call this before putting external data into slides — "
+                    "it helps catch bad/missing/anomalous data before presentation."
+                ),
+                schema=ValidateExternalDataInput,
+                strict=True,
+            ),
+            Tool(
+                name="runMLModel",
+                description=(
+                    "Run a specific ML model on previously fetched external data. "
+                    "Use listMLModels first to see available models and their descriptions. "
+                    "Each model specializes in one aspect: anomaly detection (zscore_anomaly, "
+                    "iqr_anomaly), trend analysis (trend_detection), or baseline statistics "
+                    "(statistical_baseline). Models return structured results you can use "
+                    "directly in slide content."
+                ),
+                schema=RunMLModelInput,
+                strict=True,
+            ),
+            Tool(
+                name="listMLModels",
+                description=(
+                    "List all available ML models with their descriptions, capabilities, "
+                    "and when to use each one. Use this to discover which models are best "
+                    "for your current data before calling runMLModel or validateExternalData."
+                ),
+                schema=ListMLModelsInput,
                 strict=True,
             ),
         ]
@@ -383,6 +485,53 @@ class ChatTools:
             save_custom_theme=bool(payload.save_custom_theme),
         )
 
+    async def _fetch_external_data(self, args: dict[str, Any]) -> dict[str, Any]:
+        payload = FetchExternalDataInput(**args)
+        return await self._memory.fetch_external_data(
+            source=payload.source,
+            query=payload.query,
+            limit=payload.limit or 50,
+        )
+
+    async def _analyze_external_data(self, args: dict[str, Any]) -> dict[str, Any]:
+        payload = AnalyzeExternalDataInput(**args)
+        return await self._memory.analyze_external_data(
+            source=payload.source,
+            query=payload.query,
+            focus=payload.focus,
+        )
+
+    async def _suggest_chart(self, args: dict[str, Any]) -> dict[str, Any]:
+        payload = SuggestChartInput(**args)
+        return self._suggest_chart_type(
+            data_kind=payload.data_kind,
+            description=payload.description,
+            available_chart_types=payload.available_chart_types,
+        )
+
+    async def _list_data_sources(self, _: dict[str, Any]) -> dict[str, Any]:
+        return self._list_available_data_sources()
+
+    async def _validate_external_data(self, args: dict[str, Any]) -> dict[str, Any]:
+        payload = ValidateExternalDataInput(**args)
+        return await self._memory.validate_external_data(
+            source=payload.source,
+            query=payload.query,
+            model_names=payload.model_names,
+            focus=payload.focus,
+        )
+
+    async def _run_ml_model(self, args: dict[str, Any]) -> dict[str, Any]:
+        payload = RunMLModelInput(**args)
+        return await self._memory.run_ml_model(
+            source=payload.source,
+            query=payload.query,
+            model_name=payload.model_name,
+        )
+
+    async def _list_ml_models(self, _: dict[str, Any]) -> dict[str, Any]:
+        return self._list_ml_models_catalog()
+
     @staticmethod
     def _parse_args(arguments: str | None) -> dict[str, Any]:
         if not arguments:
@@ -412,7 +561,97 @@ class ChatTools:
         return ""
 
     @staticmethod
+    def _suggest_chart_type(
+        data_kind: str,
+        description: str | None = None,
+        available_chart_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        kind_chart_map: dict[str, list[str]] = {
+            "time_series": ["line", "area", "column"],
+            "categorical": ["bar", "column", "pie", "donut"],
+            "single_value": ["scorecard", "gauge"],
+            "multi_value": ["bar", "column", "radar"],
+            "matrix": ["heatmap"],
+            "table": ["table"],
+            "histogram": ["histogram", "bar"],
+            "text": ["none"],
+        }
+        primary = kind_chart_map.get(data_kind, ["table"])[0]
+        alternatives = kind_chart_map.get(data_kind, ["table"])[1:]
+        if available_chart_types:
+            available_lower = {c.lower() for c in available_chart_types}
+            alternatives = [a for a in alternatives if a in available_lower]
+            if primary not in available_lower and alternatives:
+                primary = alternatives[0]
+                alternatives = alternatives[1:]
+        return {
+            "data_kind": data_kind,
+            "primary_chart": primary,
+            "alternatives": alternatives,
+            "reason": f"Best chart for {data_kind} data based on data shape.",
+            "description": description,
+        }
+
+    @staticmethod
+    def _list_available_data_sources() -> dict[str, Any]:
+        try:
+            from services.integrations.registry import get_adapter_registry
+            from services.integrations.adapter_schema import AdapterSchemaProvider
+
+            registry = get_adapter_registry()
+            if not registry.list_types():
+                from services.chat.memory_layer import _init_adapters
+                _init_adapters(registry)
+            types = registry.list_types()
+
+            schemas = {}
+            for t in types:
+                s = AdapterSchemaProvider.get_schema(t)
+                if s:
+                    schemas[t] = {
+                        "description": s.get("description"),
+                        "required": s.get("required_config"),
+                        "optional": s.get("optional_config"),
+                        "supports": s.get("supports"),
+                        "fixture_mode": s.get("fixture_mode"),
+                    }
+
+            return {
+                "available": True,
+                "adapter_types": types,
+                "count": len(types),
+                "schemas": schemas,
+                "note": "Use fetchExternalData with any of these source types. See schema for required config per adapter.",
+            }
+        except Exception:
+            return {
+                "available": True,
+                "adapter_types": ["grafana", "rest", "d_database", "prometheus", "custom_http"],
+                "count": 5,
+                "note": "Fallback listing. Real adapter registry may have additional types.",
+            }
+
+    @staticmethod
     def _truncate(value: str, limit: int) -> str:
         if len(value) <= limit:
             return value
         return f"{value[:limit]}..."
+
+    @staticmethod
+    def _list_ml_models_catalog() -> dict[str, Any]:
+        try:
+            from services.integrations.ml.registry import get_ml_registry
+            registry = get_ml_registry()
+            catalog = registry.get_agent_catalog()
+            return {
+                "available": True,
+                "models": catalog,
+                "count": len(catalog),
+                "usage_guide": (
+                    "Each model has a 'when_to_use' field explaining the right scenario. "
+                    "Use runMLModel with the model_name to execute. "
+                    "For comprehensive validation, use validateExternalData which runs all compatible models."
+                ),
+            }
+        except Exception:
+            return {"available": False, "models": [], "error": "ML registry not available."}

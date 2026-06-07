@@ -820,6 +820,640 @@ class PresentationChatMemoryLayer:
             )
         return context
 
+    async def fetch_external_data(
+        self,
+        *,
+        source: str,
+        query: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Fetch + pre-aggregate external data for LLM consumption.
+
+        Uses the integrations adapter layer (Grafana/Prometheus/REST adapters)
+        to produce NormalizedDataSetDTO → statistical analysis → LLM-safe result.
+
+        ARCHITECTURE:
+        Adapter Registry → Adapter.fetch_normalized() → NormalizedDataSetDTO
+            → DataAnalyzer (z-score anomalies, trend, stats)
+            → LLM-safe compact result (~2-5KB)
+        """
+        source_normalized = (source or "").strip().lower()
+        limit = max(1, min(limit, 500))
+
+        # ── Route through adapter registry ──
+        analysis_result = await self._run_integration_analysis(
+            source=source_normalized,
+            query=query,
+            limit=limit,
+        )
+        if analysis_result is not None:
+            return analysis_result
+
+        # ── Fallback to legacy mock aggregation ──
+        if source_normalized == "grafana":
+            raw_rows = await self._fetch_grafana_raw(query, limit)
+        elif source_normalized in ("d_database", "prometheus"):
+            raw_rows = await self._fetch_generic_metrics_raw(source_normalized, query, limit)
+        elif source_normalized == "custom_http" or source_normalized == "rest":
+            raw_rows = await self._fetch_custom_http_raw(query, limit)
+        else:
+            return {
+                "ok": False,
+                "source": source,
+                "error": f"Unsupported source: {source}. Use grafana, d_database, prometheus, rest, or custom_http.",
+                "summary": "",
+                "aggregated": {},
+                "anomalies": [],
+                "chart_data": [],
+                "raw_total_count": 0,
+            }
+
+        if not raw_rows:
+            return {
+                "ok": True,
+                "source": source,
+                "query": query,
+                "summary": "No data returned from the external source.",
+                "aggregated": {},
+                "anomalies": [],
+                "chart_data": [],
+                "raw_total_count": 0,
+            }
+
+        aggregated = self._aggregate_metrics(raw_rows, source_normalized)
+        return {
+            "ok": True,
+            "source": source,
+            "query": query,
+            "summary": aggregated["summary"],
+            "aggregated": aggregated["stats"],
+            "anomalies": aggregated["anomalies"],
+            "chart_data": aggregated["chart_data"],
+            "raw_sample": raw_rows[:3],
+            "raw_total_count": len(raw_rows),
+            "note": (
+                f"Aggregated {len(raw_rows)} raw data points. "
+                "Use 'summary' directly as slide description text. "
+                "Use 'chart_data' directly in slide's chart.data field (already {label, value}, ≤12 items, matches ChartDatumSchema). "
+                "Include 'anomalies' items in slide description with severity markers."
+            ),
+        }
+
+    async def _run_integration_analysis(
+        self,
+        *,
+        source: str,
+        query: str,
+        limit: int,
+    ) -> dict[str, Any] | None:
+        """Try the integration adapter pipeline with statistical analysis."""
+        try:
+            from services.integrations.registry import get_adapter_registry
+            from services.integrations.config_resolver import AdapterConfigResolver
+            from services.integrations.dto import ResolvedAdapterConfig
+            from services.integrations.analysis.statistical import (
+                build_analysis_result,
+                build_chart_data,
+                detect_anomalies,
+            )
+            from services.integrations.analysis.llm_bridge import LLMAnalysisBridge
+
+            registry = get_adapter_registry()
+
+            # Auto-initialize adapters on first use
+            if not registry.list_types():
+                _init_adapters(registry)
+
+            if source not in registry.list_types():
+                # d_database → rest, custom_http → rest
+                if source in ("d_database", "prometheus", "custom_http"):
+                    source = "rest"
+                else:
+                    return None
+
+            adapter = registry.get(source)
+
+            config = AdapterConfigResolver.resolve(
+                datasource_id=f"chat-{source}",
+                datasource_type=source,
+                query_config={"query": query, "row_limit": limit},
+            )
+
+            dataset = await adapter.fetch_normalized(config)
+            if not dataset.rows:
+                return {
+                    "ok": True,
+                    "source": source,
+                    "query": query,
+                    "summary": "No data returned from the external source.",
+                    "aggregated": {},
+                    "anomalies": [],
+                    "chart_data": [],
+                    "raw_total_count": 0,
+                }
+
+            anomalies = await detect_anomalies(dataset)
+            chart_data = await build_chart_data(dataset, max_points=12)
+            analysis = await build_analysis_result(dataset, anomalies=anomalies, chart_data=chart_data, max_chart_points=12)
+            llm_context = LLMAnalysisBridge.build_llm_context(analysis)
+
+            return {
+                "ok": True,
+                "source": source,
+                "query": query,
+                "summary": analysis.summary,
+                "llm_context": llm_context,
+                "aggregated": {
+                    "stats": analysis.stats.model_dump() if analysis.stats else {},
+                    "data_kind": dataset.data_kind.value,
+                    "visualization_hint": analysis.visualization_hint.value if analysis.visualization_hint else None,
+                },
+                "anomalies": [
+                    a.model_dump() for a in analysis.anomalies
+                ],
+                "chart_data": [
+                    {"label": c.label, "value": c.value, "series": c.series}
+                    for c in analysis.chart_data
+                ],
+                "raw_sample": dataset.rows[:3],
+                "raw_total_count": analysis.raw_total_count,
+                "processing_recommendation": dataset.profile.processing_recommendation.value,
+                "note": (
+                    f"Full analysis: {len(dataset.rows)} data points from {source}. "
+                    f"DataKind: {dataset.data_kind.value}. "
+                    "Use 'summary' as slide description. "
+                    "Use 'chart_data' in slide's chart.data field (matches ChartDatumSchema). "
+                    "Use 'llm_context' for detailed analysis context. "
+                    "Anomaly severity: critical/warning/watch."
+                ),
+            }
+
+        except Exception:
+            LOGGER.exception("Integration adapter analysis failed, falling back to legacy")
+            return None
+
+    # ── Aggregation Engine ───────────────────────────────────────────────
+
+    @staticmethod
+    def _aggregate_metrics(rows: list[dict[str, Any]], source: str) -> dict[str, Any]:
+        """
+        Reduce N raw data points → compact summary + stats + anomalies + chart data.
+
+        LLM-safe: output is always under ~2KB regardless of input size.
+        """
+        if not rows:
+            return {"summary": "", "stats": {}, "anomalies": [], "chart_data": []}
+
+        group_key = "service" if any("service" in r for r in rows) else (
+            "region" if any("region" in r for r in rows) else "pod"
+        )
+        metric_key = "metric" if any("metric" in r for r in rows) else None
+
+        # ── Group stats ──────────────────────────────────────────────
+        groups: dict[str, dict[str, list[float]]] = {}
+        for row in rows:
+            group = str(row.get(group_key, "default"))
+            m_name = str(row.get(metric_key, "value")) if metric_key else "value"
+            val = row.get("value")
+            if not isinstance(val, (int, float)):
+                continue
+            groups.setdefault(group, {}).setdefault(m_name, []).append(val)
+
+        stats: dict[str, dict[str, dict[str, float]]] = {}
+        for group, metrics in groups.items():
+            stats[group] = {}
+            for m_name, vals in metrics.items():
+                if not vals:
+                    continue
+                vals_sorted = sorted(vals)
+                n = len(vals_sorted)
+                stats[group][m_name] = {
+                    "min": vals_sorted[0],
+                    "max": vals_sorted[-1],
+                    "avg": round(sum(vals_sorted) / n, 2),
+                    "p50": vals_sorted[n // 2],
+                    "p95": vals_sorted[min(n - 1, int(n * 0.95))],
+                    "count": n,
+                }
+
+        # ── Anomalies (threshold breaches) ────────────────────────────
+        anomalies: list[dict[str, Any]] = []
+        for row in rows:
+            threshold = row.get("threshold") or row.get("limit")
+            value = row.get("value")
+            if not isinstance(threshold, (int, float)) or not isinstance(value, (int, float)):
+                continue
+            factor = value / threshold if threshold != 0 else float("inf")
+            if factor > 0.8:
+                severity = "critical" if factor > 2.0 else ("warning" if factor > 1.0 else "watch")
+                anomalies.append({
+                    "severity": severity,
+                    "factor": round(factor, 2),
+                    **{k: v for k, v in row.items() if k in ("service", "pod", "region", "metric", "timestamp", "value", "threshold")},
+                })
+
+        anomalies.sort(key=lambda a: a["factor"], reverse=True)
+        top_anomalies = anomalies[:8]
+
+        # Chart data — capped at 12 points, format matches template schema {label, value}
+        # The LLM can use this directly in chart.data without transformation.
+        chart_data: list[dict[str, Any]] = []
+        MAX_CHART_POINTS = 12  # matches ChartDatumSchema max
+
+        if metric_key and any("timestamp" in r for r in rows):
+            # Time-series: aggregate by group+metric, pick top by abs(value)
+            seen: set[str] = set()
+            for row in rows:
+                svc = row.get(group_key, "")
+                m_name = row.get(metric_key, "")
+                val = row.get("value")
+                if not isinstance(val, (int, float)):
+                    continue
+                label = f"{svc}/{m_name}" if svc else m_name
+                key = f"{svc}|{m_name}"
+                if key not in seen:
+                    seen.add(key)
+                    chart_data.append({"label": label[:12], "value": val})
+            if len(chart_data) > MAX_CHART_POINTS:
+                chart_data = sorted(chart_data, key=lambda p: abs(p["value"]), reverse=True)[:MAX_CHART_POINTS]
+        elif not metric_key:
+            for row in rows:
+                label = str(row.get(group_key, ""))[:12]
+                val = row.get("value")
+                if isinstance(val, (int, float)):
+                    chart_data.append({"label": label, "value": val})
+            if len(chart_data) > MAX_CHART_POINTS:
+                chart_data = chart_data[:MAX_CHART_POINTS]
+
+        # ── Build readable summary ────────────────────────────────────
+        summary_parts: list[str] = [
+            f"Data source returned {len(rows)} data points across {len(stats)} {group_key}(s)."
+        ]
+
+        for group, m_stats in stats.items():
+            lines = [f"  {group}:"]
+            for m_name, s in m_stats.items():
+                lines.append(
+                    f"    {m_name}: avg={s['avg']:.1f}, max={s['max']:.1f}, "
+                    f"p95={s['p95']:.1f} (n={s['count']})"
+                )
+            summary_parts.extend(lines[:6])  # cap per group
+
+        if top_anomalies:
+            summary_parts.append(f"Anomalies ({len(top_anomalies)} top):")
+            for a in top_anomalies[:5]:
+                location = a.get("service") or a.get("pod") or a.get("region") or ""
+                metric = a.get("metric", "")
+                summary_parts.append(
+                    f"  {a['severity'].upper()}: {location}/{metric} "
+                    f"({a['value']} vs threshold {a.get('threshold','?')}, x{a['factor']})"
+                )
+
+        return {
+            "summary": "\n".join(summary_parts),
+            "stats": stats,
+            "anomalies": top_anomalies,
+            "chart_data": chart_data,
+        }
+
+    # ── Raw fetchers (mock → replace with real httpx) ──────────────────
+
+    async def _fetch_grafana_raw(self, query: str, limit: int) -> list[dict[str, Any]]:
+        """
+        Mock Grafana fetch. Replace with real httpx call:
+            async with httpx.AsyncClient(...) as client:
+                resp = await client.get(f"{GRAFANA_URL}/api/ds/query", ...)
+                return resp.json()["results"]["frames"][0]["data"]["values"]
+        """
+        topic = (query or "system_metrics").strip().lower()
+
+        if any(word in topic for word in ("cpu", "latency", "response", "load")):
+            return [
+                {"timestamp": "2026-06-07T10:00:00Z", "service": "api-gateway", "metric": "p99_latency_ms", "value": 342, "threshold": 200},
+                {"timestamp": "2026-06-07T10:00:00Z", "service": "api-gateway", "metric": "p50_latency_ms", "value": 45, "threshold": 100},
+                {"timestamp": "2026-06-07T10:00:00Z", "service": "api-gateway", "metric": "error_rate_pct", "value": 2.3, "threshold": 1.0},
+                {"timestamp": "2026-06-07T10:00:00Z", "service": "api-gateway", "metric": "throughput_rps", "value": 1840, "threshold": 2000},
+                {"timestamp": "2026-06-07T10:01:00Z", "service": "user-service", "metric": "p99_latency_ms", "value": 128, "threshold": 200},
+                {"timestamp": "2026-06-07T10:01:00Z", "service": "user-service", "metric": "error_rate_pct", "value": 0.5, "threshold": 1.0},
+                {"timestamp": "2026-06-07T10:01:00Z", "service": "user-service", "metric": "cpu_pct", "value": 73.1, "threshold": 80.0},
+                {"timestamp": "2026-06-07T10:02:00Z", "service": "postgres-primary", "metric": "connection_count", "value": 142, "threshold": 200},
+                {"timestamp": "2026-06-07T10:02:00Z", "service": "cache-redis", "metric": "hit_rate_pct", "value": 94.2, "threshold": 95.0},
+                {"timestamp": "2026-06-07T10:03:00Z", "service": "api-gateway", "metric": "p99_latency_ms", "value": 491, "threshold": 200},
+                {"timestamp": "2026-06-07T10:03:00Z", "service": "api-gateway", "metric": "error_rate_pct", "value": 4.1, "threshold": 1.0},
+                {"timestamp": "2026-06-07T10:03:00Z", "service": "api-gateway", "metric": "throughput_rps", "value": 2150, "threshold": 2000},
+                {"timestamp": "2026-06-07T10:03:00Z", "service": "api-gateway", "metric": "circuit_breaker", "value": 1, "threshold": 0},
+            ][:limit]
+        if any(word in topic for word in ("memory", "ram", "heap")):
+            return [
+                {"timestamp": "2026-06-07T10:00:00Z", "pod": "web-7d4f", "metric": "heap_used_mb", "value": 512, "limit": 1024},
+                {"timestamp": "2026-06-07T10:00:00Z", "pod": "worker-a1", "metric": "heap_used_mb", "value": 890, "limit": 1024},
+                {"timestamp": "2026-06-07T10:00:00Z", "pod": "worker-b2", "metric": "heap_used_mb", "value": 1001, "limit": 1024},
+                {"timestamp": "2026-06-07T10:00:00Z", "pod": "worker-b2", "metric": "oom_killed_last_h", "value": 2, "limit": 0},
+            ][:limit]
+        if any(word in topic for word in ("revenue", "sales", "profit", "growth")):
+            return [
+                {"quarter": "Q1 2026", "region": "North America", "revenue": 4_200_000, "growth_pct": 12.4, "churn_pct": 3.1},
+                {"quarter": "Q1 2026", "region": "EMEA", "revenue": 2_800_000, "growth_pct": 8.7},
+                {"quarter": "Q2 2026", "region": "North America", "revenue": 4_720_000, "growth_pct": 12.4},
+                {"quarter": "Q2 2026", "region": "EMEA", "revenue": 3_100_000, "growth_pct": 10.7},
+            ][:limit]
+        return [
+            {"timestamp": "2026-06-07T10:00:00Z", "metric": "active_users", "value": 15_432},
+            {"timestamp": "2026-06-07T10:01:00Z", "metric": "active_users", "value": 16_001},
+            {"timestamp": "2026-06-07T10:00:00Z", "metric": "error_rate_pct", "value": 1.2},
+            {"timestamp": "2026-06-07T10:01:00Z", "metric": "error_rate_pct", "value": 1.8},
+        ][:limit]
+
+    async def _fetch_generic_metrics_raw(self, source: str, query: str, limit: int) -> list[dict[str, Any]]:
+        """Mock Prometheus / D database fetch. Replace with real httpx calls."""
+        return []
+
+    async def _fetch_custom_http_raw(self, endpoint: str, limit: int) -> list[dict[str, Any]]:
+        """Mock custom HTTP / REST fetch. Returns empty, real adapter handles this."""
+        return []
+
+    async def validate_external_data(
+        self,
+        *,
+        source: str,
+        query: str,
+        model_names: list[str] | None = None,
+        focus: str | None = None,
+    ) -> dict[str, Any]:
+        """Run ML validation on external data — LLM reviews quality before using in slides."""
+        try:
+            from services.integrations.registry import get_adapter_registry
+            from services.integrations.config_resolver import AdapterConfigResolver
+            from services.integrations.ml.registry import get_ml_registry
+
+            registry = get_adapter_registry()
+            if not registry.list_types():
+                _init_adapters(registry)
+
+            source_normalized = source.lower()
+            if source_normalized in ("d_database", "prometheus", "custom_http"):
+                source_normalized = "rest"
+
+            if source_normalized not in registry.list_types():
+                return {"ok": False, "error": f"Source {source} not available."}
+
+            adapter = registry.get(source_normalized)
+            config = AdapterConfigResolver.resolve(
+                datasource_id=f"validate-{source_normalized}",
+                datasource_type=source_normalized,
+                query_config={"query": query, "row_limit": 500},
+            )
+            dataset = await adapter.fetch_normalized(config)
+
+            if not dataset.rows:
+                return {"ok": True, "verdict": "empty", "quality_issues": ["No data returned from source."]}
+
+            ml = get_ml_registry()
+            selected = ml.smart_select(dataset, focus=focus, max_models=5)
+
+            if model_names:
+                try:
+                    selected = [ml.get(n) for n in model_names if n in ml.list_models()]
+                except KeyError:
+                    pass
+
+            results: dict[str, object] = {}
+            quality_issues: list[str] = []
+            total_anomalies = 0
+
+            for model in selected:
+                try:
+                    r = await model.analyze(dataset)
+                    results[model.model_name] = r
+                    anomalies = r.get("anomalies", [])
+                    if isinstance(anomalies, list):
+                        total_anomalies += len(anomalies)
+                except Exception as exc:
+                    results[model.model_name] = {"error": str(exc)}
+
+            # ── Build quality verdict ──
+            row_count = len(dataset.rows)
+            baseline = results.get("statistical_baseline", {})
+
+            if row_count < 3:
+                quality_issues.append(f"Very small dataset ({row_count} points). Results may be unreliable.")
+                verdict = "inconclusive"
+            elif row_count < 10:
+                quality_issues.append(f"Small dataset ({row_count} points). Treat with caution.")
+                verdict = "suspect" if total_anomalies > 0 else "likely_valid"
+            elif total_anomalies > row_count * 0.3:
+                quality_issues.append(
+                    f"High anomaly rate: {total_anomalies} anomalies in {row_count} points ({(total_anomalies/row_count)*100:.0f}%). "
+                    "Data may contain errors or the source may be experiencing issues."
+                )
+                verdict = "suspect"
+            elif total_anomalies > 0:
+                quality_issues.append(
+                    f"{total_anomalies} anomalies detected. Review highlighted items before using in slides."
+                )
+                verdict = "likely_valid"
+            else:
+                verdict = "valid"
+
+            if isinstance(baseline, dict):
+                std = baseline.get("value_std", 0)
+                avg = baseline.get("value_avg", 0)
+                if isinstance(avg, (int, float)) and isinstance(std, (int, float)) and avg != 0 and std / abs(avg) > 2:
+                    quality_issues.append("High variance detected — data may be noisy or contain extreme values.")
+
+            return {
+                "ok": True,
+                "source": source_normalized,
+                "query": query,
+                "verdict": verdict,
+                "confidence": "high" if row_count >= 30 else ("medium" if row_count >= 10 else "low"),
+                "quality_issues": quality_issues,
+                "models_run": [m.model_name for m in selected],
+                "total_anomalies": total_anomalies,
+                "row_count": row_count,
+                "data_kind": dataset.data_kind.value,
+                "model_results": results,
+                "note": (
+                    f"Verdict: {verdict.upper()}. "
+                    f"{'Data appears reliable — you can use it in slides.' if verdict == 'valid' else ''}"
+                    f"{'Review anomalies before using.' if total_anomalies > 0 else ''}"
+                    f"{'Dataset too small for confident conclusions.' if row_count < 10 else ''}"
+                ),
+            }
+
+        except Exception:
+            LOGGER.exception("validate_external_data failed")
+            return {"ok": False, "error": "Validation service encountered an error. Run individual ML models via runMLModel."}
+
+    async def run_ml_model(
+        self,
+        *,
+        source: str,
+        query: str,
+        model_name: str,
+    ) -> dict[str, Any]:
+        """Run a specific ML model on external data."""
+        try:
+            from services.integrations.registry import get_adapter_registry
+            from services.integrations.config_resolver import AdapterConfigResolver
+            from services.integrations.ml.registry import get_ml_registry
+
+            registry = get_adapter_registry()
+            if not registry.list_types():
+                _init_adapters(registry)
+
+            source_normalized = source.lower()
+            if source_normalized in ("d_database", "prometheus", "custom_http"):
+                source_normalized = "rest"
+
+            if source_normalized not in registry.list_types():
+                return {"ok": False, "error": f"Source {source} not available."}
+
+            adapter = registry.get(source_normalized)
+            config = AdapterConfigResolver.resolve(
+                datasource_id=f"ml-{source_normalized}",
+                datasource_type=source_normalized,
+                query_config={"query": query, "row_limit": 500},
+            )
+            dataset = await adapter.fetch_normalized(config)
+
+            if not dataset.rows:
+                return {"ok": True, "result": {}, "note": "No data to analyze."}
+
+            ml = get_ml_registry()
+            model = ml.get(model_name)
+
+            if not model.supports(dataset):
+                return {
+                    "ok": False,
+                    "error": f"Model '{model_name}' does not support data_kind={dataset.data_kind.value}. "
+                             f"Supported kinds: {[k.value for k in model.supported_data_kinds]}",
+                    "model_card": model.model_card,
+                }
+
+            result = await model.analyze(dataset)
+
+            return {
+                "ok": True,
+                "model_name": model_name,
+                "model_type": model.model_type,
+                "model_description": model.description,
+                "data_kind": dataset.data_kind.value,
+                "row_count": len(dataset.rows),
+                "result": result,
+                "when_to_use": model.model_card.get("when_to_use", ""),
+                "note": f"Model '{model_name}' completed. See result for structured output.",
+            }
+
+        except KeyError:
+            from services.integrations.ml.registry import get_ml_registry
+            available = get_ml_registry().list_models()
+            return {"ok": False, "error": f"Unknown model: {model_name}. Available: {available}"}
+        except Exception:
+            LOGGER.exception("run_ml_model failed")
+            return {"ok": False, "error": "ML model execution failed."}
+
+    async def analyze_external_data(
+        self,
+        *,
+        source: str,
+        query: str,
+        focus: str | None = None,
+    ) -> dict[str, Any]:
+        """Run deeper ML analysis on external data with focus control."""
+        try:
+            from services.integrations.registry import get_adapter_registry
+            from services.integrations.config_resolver import AdapterConfigResolver
+            from services.integrations.ml.models import (
+                StatisticalBaselineModel,
+                ZScoreAnomalyModel,
+                TrendDetectionModel,
+                IQRAnomalyModel,
+            )
+            from services.integrations.analysis.downsampling import build_chart_data_intelligent
+            from services.integrations.analysis.llm_bridge import LLMAnalysisBridge
+
+            registry = get_adapter_registry()
+            if not registry.list_types():
+                _init_adapters(registry)
+
+            source_normalized = source.lower()
+            if source_normalized in ("d_database", "prometheus", "custom_http"):
+                source_normalized = "rest"
+
+            if source_normalized not in registry.list_types():
+                return {"ok": False, "error": f"Source {source} is not available."}
+
+            adapter = registry.get(source_normalized)
+            config = AdapterConfigResolver.resolve(
+                datasource_id=f"chat-{source_normalized}",
+                datasource_type=source_normalized,
+                query_config={"query": query, "row_limit": 500},
+            )
+            dataset = await adapter.fetch_normalized(config)
+
+            if not dataset.rows:
+                return {"ok": True, "summary": "No data to analyze."}
+
+            results: dict[str, Any] = {
+                "ok": True,
+                "source": source_normalized,
+                "data_kind": dataset.data_kind.value,
+                "row_count": len(dataset.rows),
+            }
+
+            focus_all = focus is None
+
+            if focus_all or focus == "trends":
+                trend = TrendDetectionModel()
+                if trend.supports(dataset):
+                    trend_result = await trend.analyze(dataset)
+                    results["trend"] = trend_result
+
+            if focus_all or focus == "anomalies":
+                zscore = ZScoreAnomalyModel()
+                iqr = IQRAnomalyModel()
+                all_anomalies: list[dict[str, object]] = []
+                if zscore.supports(dataset):
+                    zr = await zscore.analyze(dataset)
+                    all_anomalies.extend(zr.get("anomalies", []))
+                if iqr.supports(dataset):
+                    ir = await iqr.analyze(dataset)
+                    seen = {(a.get("service"), a.get("metric"), a.get("timestamp")) for a in all_anomalies}
+                    for a in ir.get("anomalies", []):
+                        key = (a.get("service"), a.get("metric"), a.get("timestamp"))
+                        if key not in seen:
+                            all_anomalies.append(a)
+                            seen.add(key)
+                all_anomalies.sort(key=lambda a: -float(str(a.get("factor", 0))))
+                results["anomalies"] = all_anomalies[:10]
+                results["anomaly_count"] = len(all_anomalies)
+
+            if focus_all or focus == "distribution":
+                baseline = StatisticalBaselineModel()
+                if baseline.supports(dataset):
+                    baseline_result = await baseline.analyze(dataset)
+                    results["statistics"] = baseline_result
+
+            chart_data = build_chart_data_intelligent(dataset, max_points=12)
+            results["chart_data"] = [
+                {"label": c.label, "value": c.value, "series": c.series}
+                for c in chart_data
+            ]
+
+            analysis_summary = LLMAnalysisBridge._build_quick_summary(results, dataset)
+            results["summary"] = analysis_summary
+            results["note"] = (
+                "ML-powered analysis complete. Use 'summary' for slide text. "
+                "Use 'chart_data' for chart rendering. Anomaly results from Z-score + IQR models."
+            )
+
+            return results
+        except Exception:
+            LOGGER.exception("ML analysis failed")
+            return {"ok": False, "error": "Analysis service encountered an error. Try fetchExternalData as fallback."}
+
     async def _get_layout_by_id(
         self,
         layout_id: str,
@@ -1343,3 +1977,11 @@ class PresentationChatMemoryLayer:
         # Relative luminance approximation.
         luma = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
         return luma < 0.5
+
+
+def _init_adapters(registry: Any) -> None:
+    from services.integrations.grafana.adapter import GrafanaDataAdapter
+    from services.integrations.rest.adapter import RestDataAdapter
+
+    registry.register(GrafanaDataAdapter())
+    registry.register(RestDataAdapter())
