@@ -1378,6 +1378,8 @@ class PresentationChatMemoryLayer:
                 ZScoreAnomalyModel,
                 TrendDetectionModel,
                 IQRAnomalyModel,
+                ChangePointDetectionModel,
+                SeasonalDecompositionModel,
             )
             from services.integrations.analysis.downsampling import build_chart_data_intelligent
             from services.integrations.analysis.llm_bridge import LLMAnalysisBridge
@@ -1413,11 +1415,15 @@ class PresentationChatMemoryLayer:
 
             focus_all = focus is None
 
-            if focus_all or focus == "trends":
+            if focus_all or focus == "trends" or focus == "decomposition":
                 trend = TrendDetectionModel()
+                seasonal = SeasonalDecompositionModel()
                 if trend.supports(dataset):
                     trend_result = await trend.analyze(dataset)
                     results["trend"] = trend_result
+                if seasonal.supports(dataset):
+                    seasonal_result = await seasonal.analyze(dataset)
+                    results["seasonal_decomposition"] = seasonal_result
 
             if focus_all or focus == "anomalies":
                 zscore = ZScoreAnomalyModel()
@@ -1434,6 +1440,12 @@ class PresentationChatMemoryLayer:
                         if key not in seen:
                             all_anomalies.append(a)
                             seen.add(key)
+
+            if focus_all or focus == "changes":
+                change_pt = ChangePointDetectionModel()
+                if change_pt.supports(dataset):
+                    cp_result = await change_pt.analyze(dataset)
+                    results["change_points"] = cp_result
                 all_anomalies.sort(key=lambda a: -float(str(a.get("factor", 0))))
                 results["anomalies"] = all_anomalies[:10]
                 results["anomaly_count"] = len(all_anomalies)
