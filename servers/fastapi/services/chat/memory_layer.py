@@ -958,12 +958,17 @@ class PresentationChatMemoryLayer:
             analysis = await build_analysis_result(dataset, anomalies=anomalies, chart_data=chart_data, max_chart_points=12)
             llm_context = LLMAnalysisBridge.build_llm_context(analysis)
 
+            # ── Memory: store analysis pattern + retrieve past context ──
+            past_context = await self._retrieve_past_analysis(source, query)
+            await self._persist_analysis_to_memory(source, query, analysis, dataset)
+
             return {
                 "ok": True,
                 "source": source,
                 "query": query,
                 "summary": analysis.summary,
                 "llm_context": llm_context,
+                "past_analysis_context": past_context,
                 "aggregated": {
                     "stats": analysis.stats.model_dump() if analysis.stats else {},
                     "data_kind": dataset.data_kind.value,
@@ -985,6 +990,7 @@ class PresentationChatMemoryLayer:
                     "Use 'summary' as slide description. "
                     "Use 'chart_data' in slide's chart.data field (matches ChartDatumSchema). "
                     "Use 'llm_context' for detailed analysis context. "
+                    "Check 'past_analysis_context' for historical trends from previous fetches. "
                     "Anomaly severity: critical/warning/watch."
                 ),
             }
@@ -1453,6 +1459,60 @@ class PresentationChatMemoryLayer:
         except Exception:
             LOGGER.exception("ML analysis failed")
             return {"ok": False, "error": "Analysis service encountered an error. Try fetchExternalData as fallback."}
+
+    async def _persist_analysis_to_memory(
+        self,
+        source: str,
+        query: str,
+        analysis: Any,
+        dataset: Any,
+    ) -> None:
+        try:
+            from services.mem0_presentation_memory_service import MEM0_PRESENTATION_MEMORY_SERVICE
+            from datetime import UTC, datetime
+
+            memory_key = f"ext_data:{source}:{query[:80]}"
+            snapshot = {
+                "memory_key": memory_key,
+                "source": source,
+                "query": query,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "row_count": len(dataset.rows),
+                "data_kind": dataset.data_kind.value,
+                "summary": analysis.summary[:1000],
+                "stats": analysis.stats.model_dump() if analysis.stats else {},
+                "anomaly_count": len(analysis.anomalies) if analysis.anomalies else 0,
+                "visualization_hint": analysis.visualization_hint.value if analysis.visualization_hint else None,
+                "value_avg": analysis.stats.value_avg if analysis.stats else None,
+                "value_max": analysis.stats.value_max if analysis.stats else None,
+                "trend_direction": analysis.stats.trend_direction if analysis.stats else None,
+            }
+
+            memory_text = json.dumps(snapshot, ensure_ascii=False, default=str)
+            await MEM0_PRESENTATION_MEMORY_SERVICE.store_slide_edit(
+                presentation_id=self._presentation_id,
+                slide_index=-1,  # signal: this is not a slide edit
+                edit_prompt=f"[external_data_analysis] {memory_key}",
+                edited_slide_content={"__memory_snapshot__": snapshot},
+            )
+            LOGGER.info("Persisted analysis to memory: key=%s", memory_key)
+        except Exception:
+            LOGGER.debug("Failed to persist analysis to memory (non-fatal)")
+
+    async def _retrieve_past_analysis(self, source: str, query: str) -> str:
+        try:
+            from services.mem0_presentation_memory_service import MEM0_PRESENTATION_MEMORY_SERVICE
+
+            search_query = f"external data analysis {source} {query[:60]} metrics trend"
+            context = await MEM0_PRESENTATION_MEMORY_SERVICE.retrieve_context(
+                self._presentation_id,
+                search_query,
+            )
+            if context and "external_data_analysis" in context:
+                return context
+            return ""
+        except Exception:
+            return ""
 
     async def _get_layout_by_id(
         self,
