@@ -155,6 +155,36 @@ class LLMAnalysisBridge:
         return "\n".join(lines)
 
     @staticmethod
+    def build_full_sre_report(
+        analysis: AnalysisResultDTO,
+        *,
+        dataset: NormalizedDataSetDTO | None = None,
+        past_context: str = "",
+    ) -> str:
+        """Build a complete SRE review report with data-driven context."""
+        parts = [LLMAnalysisBridge.build_llm_context(analysis)]
+
+        if dataset and dataset.rows:
+            from services.integrations.analysis.context_analyzer import build_context_report
+            field_names = [f.name for f in dataset.data_schema] if dataset.data_schema else list(dataset.rows[0].keys()) if dataset.rows else []
+            timestamps = None
+            if dataset.profile.time_field:
+                timestamps = [
+                    str(row.get(dataset.profile.time_field, ""))
+                    for row in dataset.rows
+                ]
+            ctx_report = build_context_report(field_names, dataset.rows, timestamps=timestamps)
+            parts.append("\n" + ctx_report)
+
+        if past_context:
+            parts.append("\n\nHISTORICAL CONTEXT (previous analysis):")
+            parts.append("-" * 30)
+            parts.append(past_context[:2000])
+            parts.append("\nCompare current values against this baseline. Highlight Week-over-Week deltas.")
+
+        return "\n".join(parts)
+
+    @staticmethod
     def _build_quick_summary(results: dict[str, object], dataset: NormalizedDataSetDTO) -> str:
         parts: list[str] = [
             f"SRE Analysis: {dataset.source_type} | {len(dataset.rows)} points | {dataset.data_kind.value}."

@@ -51,6 +51,13 @@ _MOCK_DATA: dict[str, list[dict[str, object]]] = {
     ],
 }
 
+_MOCK_PANEL_META: dict[str, dict[str, object]] = {
+    "cpu": {"panel_title": "API Gateway — Four Golden Signals", "panel_description": "Latency (p50/p99), error rate, throughput, and circuit breaker status for api-gateway and downstream services. SLO: p99 < 200ms, error rate < 1%.", "slo_p99_ms": 200, "slo_error_pct": 1.0},
+    "memory": {"panel_title": "Kubernetes Pods — Memory Saturation", "panel_description": "Heap usage per pod with OOM kill counter. Worker pods should stay under 80% of 1024MB limit. OOM kills indicate memory pressure requiring investigation.", "memory_limit_mb": 1024},
+    "revenue": {"panel_title": "Quarterly Revenue by Region", "panel_description": "Revenue growth and churn rate by region. QoQ growth target: > 10%. Churn should trend below 3%.", "growth_target_pct": 10.0},
+    "default": {"panel_title": "System Overview", "panel_description": "General system metrics. Active user count and error rate overview."},
+}
+
 
 class GrafanaDataAdapter:
     def __init__(
@@ -78,10 +85,13 @@ class GrafanaDataAdapter:
 
         # ── Mock data from query keywords ──
         query_str = str(config.get("query", "")).strip().lower()
+        panel_meta = _extract_panel_metadata(config)
+
+        # ── Mock data from query keywords ──
         mock_data = self._match_mock_data(query_str)
         if mock_data is not None:
             LOGGER.info("Grafana: using mock data for query=%r", query_str)
-            return self._normalize_mock_rows(mock_data, request)
+            return self._normalize_mock_rows(mock_data, request, panel_meta)
 
         # ── Real HTTP mode ──
         base_url = str(config.get("base_url", "")).strip()
@@ -105,7 +115,7 @@ class GrafanaDataAdapter:
         )
 
         row_limit = _optional_int(config, "row_limit")
-        return self._normalizer.normalize(
+        dataset = self._normalizer.normalize(
             raw,
             source_id=source_id,
             binding_id=request.binding_id,
@@ -114,6 +124,9 @@ class GrafanaDataAdapter:
             visualization_hint=_optional_str(config, "visualization_hint"),
             row_limit=row_limit,
         )
+        if panel_meta:
+            dataset.metadata["panel"] = panel_meta
+        return dataset
 
     @staticmethod
     def _match_mock_data(query: str) -> list[dict[str, object]] | None:
@@ -130,10 +143,26 @@ class GrafanaDataAdapter:
             return _MOCK_DATA["revenue"]
         return None
 
+    @staticmethod
+    def _match_mock_meta(query: str) -> dict[str, object] | None:
+        if not query:
+            return _MOCK_PANEL_META.get("default")
+        for keyword, meta in _MOCK_PANEL_META.items():
+            if keyword in query:
+                return meta
+        if any(w in query for w in ("cpu", "latency", "response", "load")):
+            return _MOCK_PANEL_META["cpu"]
+        if any(w in query for w in ("memory", "ram", "heap")):
+            return _MOCK_PANEL_META["memory"]
+        if any(w in query for w in ("revenue", "sales", "profit", "growth")):
+            return _MOCK_PANEL_META["revenue"]
+        return _MOCK_PANEL_META.get("default")
+
     def _normalize_mock_rows(
         self,
         rows: list[dict[str, object]],
         request: ResolvedAdapterConfig,
+        panel_meta: dict[str, object] | None = None,
     ) -> NormalizedDataSetDTO:
         from services.integrations.builder import ParsedDataFrame, ParsedField
         from services.integrations.grafana.parser import _infer_fields_from_rows as infer
@@ -147,12 +176,15 @@ class GrafanaDataAdapter:
             rows=rows,
         )
         row_limit = _optional_int(request.config, "row_limit")
-        return self._normalizer._builder.build(
+        dataset = self._normalizer._builder.build(
             [frame],
             preferred_data_kind=_optional_str(request.config, "data_kind_hint"),
             visualization_hint=_optional_str(request.config, "visualization_hint"),
             row_limit=row_limit,
         )
+        if panel_meta:
+            dataset.metadata["panel"] = panel_meta
+        return dataset
 
     def _normalize_fixture(
         self,
@@ -184,6 +216,25 @@ class GrafanaDataAdapter:
     def _default_time_range() -> TimeRangeForFetch:
         now = datetime.now(UTC)
         return TimeRangeForFetch(start=now - timedelta(hours=1), end=now)
+
+
+def _extract_panel_metadata(config: Mapping[str, object]) -> dict[str, object] | None:
+    """Extract panel metadata from config (title, description, SLO thresholds)."""
+    panel = dict(config.get("panel_meta", {}) or {})
+    if not panel:
+        query_str = str(config.get("query", "")).strip().lower()
+        panel = GrafanaDataAdapter._match_mock_meta(query_str) or {}
+    if not panel:
+        return None
+
+    return {
+        "panel_title": str(panel.get("panel_title", "")),
+        "panel_description": str(panel.get("panel_description", "")),
+        "slo_targets": {
+            k: v for k, v in panel.items()
+            if k.startswith("slo_") or k.endswith("_target") or k.endswith("_limit")
+        },
+    }
 
     async def close(self) -> None:
         if self._query_client:

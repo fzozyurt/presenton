@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 
 from services.integrations.dto import (
@@ -52,6 +53,7 @@ async def detect_anomalies(
     dataset: NormalizedDataSetDTO,
     *,
     zscore_threshold: float = 2.5,
+    apply_context_filter: bool = True,
 ) -> list[AnomalyDTO]:
     anomalies: list[AnomalyDTO] = []
 
@@ -94,6 +96,78 @@ async def detect_anomalies(
                     except (ValueError, TypeError):
                         pass
                     existing_vals.add(key)
+
+    # ── Context-aware filter: demote false positives ──
+    if apply_context_filter and anomalies:
+        from services.integrations.analysis.context_analyzer import (
+            profile_metric,
+            assess_anomaly_significance,
+        )
+
+        field_names = [f.name for f in dataset.data_schema] if dataset.data_schema else []
+
+        # Profile all numeric fields
+        profiles: dict[str, object] = {}
+        for name in field_names:
+            vals = [
+                float(row.get(name))
+                for row in dataset.rows
+                if isinstance(row.get(name), (int, float)) and math.isfinite(float(row.get(name, 0)))
+            ]
+            if vals:
+                timestamps = [
+                    str(row.get(dataset.profile.time_field or "timestamp", ""))
+                    for row in dataset.rows
+                ] if dataset.profile.time_field else None
+                profiles[name] = profile_metric(name, vals, timestamps)
+
+        for anomaly in anomalies:
+            metric_name = anomaly.metric or ""
+            if not metric_name:
+                continue
+
+            metric_profile = profiles.get(metric_name)
+            if metric_profile is None:
+                continue
+
+            time_of_day = None
+            day_of_week_val = None
+            if anomaly.timestamp:
+                try:
+                    from datetime import datetime as dt
+                    ts = anomaly.timestamp.replace("Z", "+00:00")
+                    parsed = dt.fromisoformat(ts)
+                    time_of_day = parsed.hour
+                    day_of_week_val = parsed.weekday()
+                except (ValueError, TypeError):
+                    pass
+
+            row_ctx = None
+            for row in dataset.rows:
+                row_metric = str(row.get("metric", ""))
+                row_ts = str(row.get("timestamp", ""))
+                if row_metric == metric_name or row_ts == anomaly.timestamp:
+                    row_ctx = row
+                    break
+
+            assessment = assess_anomaly_significance(
+                value=anomaly.value or 0,
+                zscore=anomaly.factor,
+                metric_profile=metric_profile,
+                row_context=row_ctx,
+                time_of_day=time_of_day,
+                day_of_week=day_of_week_val,
+            )
+
+            if not assessment["genuine"]:
+                anomaly.severity = AnomalySeverity.INFO
+                anomaly.description = f"[DEMOTED — {', '.join(assessment['reasons'][:2])}] {assessment['recommendation']}"
+            elif assessment["adjusted_severity"] != anomaly.severity.value:
+                anomaly.severity = AnomalySeverity(assessment["adjusted_severity"])
+                if assessment["reasons"]:
+                    anomaly.description = f"{anomaly.description or ''} | Context: {'; '.join(assessment['reasons'][:2])}"
+            elif assessment["recommendation"]:
+                anomaly.description = f"{anomaly.description or ''} | {assessment['recommendation']}"
 
     anomalies.sort(key=lambda a: a.factor, reverse=True)
     return anomalies[:12]

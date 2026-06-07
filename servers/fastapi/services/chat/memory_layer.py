@@ -956,7 +956,9 @@ class PresentationChatMemoryLayer:
             anomalies = await detect_anomalies(dataset)
             chart_data = await build_chart_data(dataset, max_points=12)
             analysis = await build_analysis_result(dataset, anomalies=anomalies, chart_data=chart_data, max_chart_points=12)
-            llm_context = LLMAnalysisBridge.build_llm_context(analysis)
+            llm_context = LLMAnalysisBridge.build_full_sre_report(
+                analysis, dataset=dataset, past_context=past_context
+            )
 
             # ── Memory: store analysis pattern + retrieve past context ──
             past_context = await self._retrieve_past_analysis(source, query)
