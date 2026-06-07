@@ -1,7 +1,8 @@
 from http.client import HTTPException
 import os
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Body, File, UploadFile
+from fastapi import APIRouter, Body, File, Query, UploadFile
+from fastapi.responses import PlainTextResponse
 
 from constants.documents import UPLOAD_ACCEPTED_FILE_TYPES
 from models.decomposed_file_info import DecomposedFileInfo
@@ -88,3 +89,20 @@ async def update_files(
         f.write(await file.read())
 
     return {"message": "File updated successfully"}
+
+
+@FILES_ROUTER.get("/read", response_class=PlainTextResponse)
+async def read_file(path: str = Query(..., description="Absolute path to the file")):
+    """Read a temp file's text content. Used by document preview in the browser."""
+    import os as _os
+    resolved = _os.path.realpath(_os.path.normpath(path))
+    allowed_dirs = [
+        _os.path.realpath(TEMP_FILE_SERVICE.base_dir),
+        _os.path.realpath(_os.environ.get("APP_DATA_DIRECTORY", _os.path.join(_os.path.sep, "tmp", "presenton"))),
+    ]
+    if not any(resolved.startswith(d) for d in allowed_dirs):
+        raise HTTPException(403, "Path not allowed")
+    if not _os.path.isfile(resolved):
+        raise HTTPException(404, "File not found")
+    with open(resolved, "r", encoding="utf-8") as f:
+        return f.read()

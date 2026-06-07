@@ -74,7 +74,7 @@ export function getFastAPIUrl(): string {
     return window.location.origin;
   }
 
-  return getConfiguredFastApiUrl() || "http://127.0.0.1:5000";
+  return getConfiguredFastApiUrl() || process.env.FAST_API_INTERNAL_URL || "http://127.0.0.1:8000";
 }
 
 // Utility to construct API URL for Docker/web runtime.

@@ -1,40 +1,28 @@
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { sanitizeFilename } from '@/app/(presentation-generator)/utils/others';
-
+import { NextResponse } from "next/server";
+import { getFastApiBaseUrl } from "@/lib/fastapi-internal";
 
 export async function POST(request: Request) {
   try {
     const { filePath } = await request.json();
-   
-      const sanitizedFilePath = sanitizeFilename(filePath);
-      const normalizedPath = path.normalize(sanitizedFilePath);
-      const allowedBaseDirs = [
-        process.env.APP_DATA_DIRECTORY || '/app/user_data',
-        process.env.TEMP_DIRECTORY || '/tmp',
-        '/app/user_data' 
-      ];
-      const resolvedPath = fs.realpathSync(path.resolve(normalizedPath));
-      const isPathAllowed = allowedBaseDirs.some(baseDir => {
-      const resolvedBaseDir = fs.realpathSync(path.resolve(baseDir));
-      return resolvedPath.startsWith(resolvedBaseDir + path.sep) || resolvedPath === resolvedBaseDir;
-    });
-    if (!isPathAllowed) {
-      console.error('Unauthorized file access attempt:', resolvedPath);
-      return NextResponse.json(
-        { error: 'Access denied: File path not allowed' },
-        { status: 403 }
-      );
+    if (!filePath || typeof filePath !== "string") {
+      return NextResponse.json({ error: "Missing filePath" }, { status: 400 });
     }
-    const content=  fs.readFileSync(resolvedPath, 'utf-8');
-    
+
+    const base = getFastApiBaseUrl();
+    const res = await fetch(
+      `${base}/api/v1/ppt/files/read?path=${encodeURIComponent(filePath)}`,
+      { method: "GET", cache: "no-store" },
+    );
+
+    if (!res.ok) {
+      const detail = await res.text();
+      return NextResponse.json({ error: detail || "Failed to read file" }, { status: res.status });
+    }
+
+    const content = await res.text();
     return NextResponse.json({ content });
   } catch (error) {
-    console.error('Error reading file:', error);
-    return NextResponse.json(
-      { error: 'Failed to read file' },
-      { status: 500 }
-    );
+    console.error("Error reading file:", error);
+    return NextResponse.json({ error: "Failed to read file" }, { status: 500 });
   }
-} 
+}
