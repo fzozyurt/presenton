@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlmodel import delete
 
 from models.sql.integration_credential import (
@@ -32,6 +31,11 @@ def _get_current_user_id(request: Request) -> str | None:
     if payload is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return payload["uid"]
+
+
+def _require_owner(owner_field: str | None, user_id: str | None):
+    if user_id and owner_field and owner_field != user_id:
+        raise HTTPException(status_code=403, detail="Not your resource")
 
 
 # ---------------------------------------------------------------------------
