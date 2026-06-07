@@ -11,6 +11,9 @@ class OIDCSessionMiddleware(BaseHTTPMiddleware):
     _EXEMPT_PREFIXES = (
         "/api/v1/auth/",
         "/api/v1/oidc/",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
     )
     _PROTECTED_NON_API_PATHS = {
         "/docs",
