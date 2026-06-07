@@ -11,6 +11,7 @@ from api.middlewares import SessionAuthMiddleware, UserConfigEnvUpdateMiddleware
 from api.v1.auth.router import API_V1_AUTH_ROUTER
 from api.v1.mock.router import API_V1_MOCK_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
+from api.v1.integrations_router import INTEGRATIONS_ROUTER
 from api.v1.webhook.router import API_V1_WEBHOOK_ROUTER
 from identity.provider import is_oidc_enabled
 from utils.get_env import (
@@ -62,6 +63,7 @@ app.include_router(API_V1_PPT_ROUTER)
 app.include_router(API_V1_WEBHOOK_ROUTER)
 app.include_router(API_V1_MOCK_ROUTER)
 app.include_router(API_V1_AUTH_ROUTER)
+app.include_router(INTEGRATIONS_ROUTER)
 
 if is_oidc_enabled():
     from api.v1.oidc_router import OIDC_ROUTER

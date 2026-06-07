@@ -15,6 +15,7 @@ class IntegrationDataSourceModel(SQLModel, table=True):
     name: str = Field(sa_column=Column(String(255), nullable=False))
     credential_ref: str | None = Field(default=None, sa_column=Column(String(255)))
     base_config: dict | None = Field(default=None, sa_column=Column(JSON))
+    created_by: str | None = Field(default=None, sa_column=Column(String(36), nullable=True))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -41,6 +42,7 @@ class IntegrationCredentialModel(SQLModel, table=True):
     key_id: str = Field(sa_column=Column(String(32), nullable=False))
     fingerprint: str = Field(sa_column=Column(String(32)))
     encrypted_secret: bytes = Field(sa_column=Column(String(4096)))
+    created_by: str | None = Field(default=None, sa_column=Column(String(36), nullable=True))
     expires_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
