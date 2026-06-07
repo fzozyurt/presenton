@@ -16,7 +16,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _get_next_public_url() -> str:
-    return (os.getenv("NEXT_PUBLIC_URL") or "").strip() or "http://127.0.0.1"
+    return (os.getenv("NEXT_PUBLIC_URL") or "").strip() or "http://127.0.0.1:3000"
 
 
 def _get_next_public_fastapi_url() -> str | None:

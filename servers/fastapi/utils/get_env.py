@@ -1,10 +1,15 @@
 import os
+import tempfile as _tempfile
 
 
 def _is_truthy(value: str | None) -> bool:
     if value is None:
         return False
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _app_data_fallback() -> str:
+    return os.path.join(_tempfile.gettempdir(), "presenton")
 
 
 def get_can_change_keys_env():
@@ -16,7 +21,7 @@ def get_database_url_env():
 
 
 def get_app_data_directory_env():
-    return os.getenv("APP_DATA_DIRECTORY")
+    return os.getenv("APP_DATA_DIRECTORY") or _app_data_fallback()
 
 
 def get_fastapi_public_base_url() -> str | None:

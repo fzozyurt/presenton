@@ -57,6 +57,7 @@ const FinalStep = () => {
       } else {
         await fetch('/api/user-config', {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             DISABLE_ANONYMOUS_TRACKING: enabled ? undefined : 'true',
           }),

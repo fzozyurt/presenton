@@ -33,6 +33,10 @@ const nextConfig = {
         source: "/app_data/:path*",
         destination: `${fastApiBase}/app_data/:path*`,
       },
+      {
+        source: "/static/:path*",
+        destination: `${fastApiBase}/static/:path*`,
+      },
     ];
   },
 
