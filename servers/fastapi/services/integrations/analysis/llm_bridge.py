@@ -173,7 +173,21 @@ class LLMAnalysisBridge:
                     str(row.get(dataset.profile.time_field, ""))
                     for row in dataset.rows
                 ]
-            ctx_report = build_context_report(field_names, dataset.rows, timestamps=timestamps)
+
+            # Extract SLO targets from panel metadata if available
+            slo_targets: dict[str, float] | None = None
+            panel_meta = dataset.metadata.get("panel", {})
+            if isinstance(panel_meta, dict):
+                raw_slo = panel_meta.get("slo_targets", {})
+                if isinstance(raw_slo, dict):
+                    slo_targets = {}
+                    for k, v in raw_slo.items():
+                        try:
+                            slo_targets[str(k)] = float(v)
+                        except (ValueError, TypeError):
+                            pass
+
+            ctx_report = build_context_report(field_names, dataset.rows, timestamps=timestamps, slo_targets=slo_targets)
             parts.append("\n" + ctx_report)
 
         if past_context:

@@ -411,6 +411,7 @@ def build_context_report(
     rows: list[dict[str, object]],
     *,
     timestamps: list[str] | None = None,
+    slo_targets: dict[str, float] | None = None,
 ) -> str:
     """Build a comprehensive, data-driven context report for LLM consumption."""
     if not rows:
@@ -478,6 +479,34 @@ def build_context_report(
             for rule in rules:
                 lines.append(f"    - {rule}")
 
+    # ── SLO / Error budget analysis ──
+    if slo_targets:
+        lines.append("\nSLO / ERROR BUDGET ANALYSIS:")
+        for metric_name, slo_value in slo_targets.items():
+            profile = profiles.get(metric_name)
+            if profile is None:
+                continue
+            total_requests = profile.value_count
+            allowed_errors = total_requests * (1 - slo_value) if slo_value < 1 else 0
+            actual_values = [
+                float(row.get(metric_name, 0))
+                for row in rows
+                if isinstance(row.get(metric_name), (int, float))
+            ]
+            breaches = sum(1 for v in actual_values if v > slo_value) if slo_value < 1 else sum(1 for v in actual_values if v > slo_value)
+            breach_rate = breaches / total_requests if total_requests > 0 else 0
+            budget_consumed_pct = (breaches / allowed_errors * 100) if allowed_errors > 0 else (100 if breaches > 0 else 0)
+            lines.append(f"  [{metric_name}] SLO: {slo_value}")
+            lines.append(f"    Breaches: {breaches}/{total_requests} ({breach_rate:.2%})")
+            if allowed_errors > 0:
+                lines.append(f"    Error budget: {allowed_errors:.0f} allowed | {breaches} consumed ({budget_consumed_pct:.1f}%)")
+                if budget_consumed_pct > 80:
+                    lines.append(f"    [!] CRITICAL: > 80% error budget consumed. Freeze non-emergency deployments.")
+                elif budget_consumed_pct > 50:
+                    lines.append(f"    [!] WARNING: > 50% error budget consumed. Investigate burn rate.")
+            elif breaches > 0:
+                lines.append(f"    [!] SLO breach detected — every occurrence is a violation.")
+
     # ── Chart suggestions ──
     lines.append("\nCHART SUGGESTIONS (data-driven):")
     has_time = any("time" in n.lower() or "timestamp" in n.lower() or "date" in n.lower() for n in field_names)
@@ -486,15 +515,15 @@ def build_context_report(
     other_numeric = [n for n in profiles if n not in rate_fields and n not in counter_fields and not (has_time and ("time" in n.lower() or "timestamp" in n.lower()))]
 
     if has_time and other_numeric:
-        lines.append(f"  → LINE chart: {other_numeric[0]} over time (time-series with LTTB downsampling)")
+        lines.append(f"  -> LINE chart: {other_numeric[0]} over time (time-series with LTTB downsampling)")
     if rate_fields and other_numeric:
-        lines.append(f"  → BAR chart: {rate_fields[0]} vs {other_numeric[0]} (rate comparison)")
+        lines.append(f"  -> BAR chart: {rate_fields[0]} vs {other_numeric[0]} (rate comparison)")
     if rels:
         for rel in rels[:2]:
             if rel.relationship == "likely_ratio" or rel.relationship == "inverse":
-                lines.append(f"  → SCATTER chart: {rel.col_a} vs {rel.col_b} (r={rel.correlation})")
+                lines.append(f"  -> SCATTER chart: {rel.col_a} vs {rel.col_b} (r={rel.correlation})")
     if counter_fields:
-        lines.append(f"  → LINE chart: {counter_fields[0]} growth rate (delta from previous period)")
+        lines.append(f"  -> LINE chart: {counter_fields[0]} growth rate (delta from previous period)")
 
     lines.append(f"\n  Total fields: {len(field_names)} | Numeric: {len(profiles)} | Relationships: {len(rels)} | Diurnal: {sum(1 for p in profiles.values() if p.has_diurnal_pattern)} | Weekly: {sum(1 for p in profiles.values() if p.has_weekly_pattern)}")
 
