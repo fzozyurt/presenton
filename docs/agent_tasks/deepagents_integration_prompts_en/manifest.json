@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-06-12T12:56:50.378883Z",
+  "language": "en",
+  "scope": "LangChain Deep Agents integration only",
+  "excludes": [
+    "Agno",
+    "branch names",
+    "repository identifiers",
+    "remote URLs"
+  ],
+  "folders": [
+    "tasks",
+    "agent_prompts",
+    "memory_seeds",
+    "checklists"
+  ],
+  "task_count": 21
+}

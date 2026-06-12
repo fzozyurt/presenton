@@ -1,0 +1,119 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // ASAITK OpenCode policy:
+  // - Keep clean modular-monolith boundaries.
+  // - Use Serena MCP before editing or planning code changes.
+  // - Do not create AGENTS.md automatically; root AGENTS.md is maintained by the project owner.
+  // - Do not use LangChain docs/MCP for this new implementation.
+  // - Main implementation model uses OpenCode Zen provider format: opencode/<model-id>.
+  // - Exact Zen model IDs can change; verify available IDs with /models in OpenCode TUI.
+  // - Subagents are configured to use the intended free DeepSeek V4 model ID below.
+  // - Never use high/max reasoning by default.
+  // - Primary agent uses medium effort; subagents use low effort and limited steps.
+  "model": "opencode/deepseek-v4-flash-free",
+  "small_model": "opencode/deepseek-v4-flash-free",
+  "formatter": {
+    "python": {
+      "command": [
+        "uv",
+        "ruff",
+        "formatter"
+      ],
+      "extensions": [
+        ".py",
+        ".pyi"
+      ]
+    }
+  },
+  "lsp": {
+    "pyright": {
+      "command": [
+        "pyright-langserver",
+        "--stdio"
+      ],
+      "extensions": [
+        ".py",
+        ".pyi"
+      ],
+      "initialization": {
+        "python": {
+          "analysis": {
+            "typeCheckingMode": "basic"
+          }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "serena": {
+      "type": "local",
+      "command": [
+        "serena",
+        "start-mcp-server",
+        "--context=ide",
+        "--project-from-cwd"
+      ],
+      "enabled": true,
+      "timeout": 60000,
+      "environment": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "langchain_docs": {
+      "type": "remote",
+      "url": "https://docs.langchain.com/mcp",
+      "enabled": true,
+      "timeout": 60000
+    },
+    "depagent_references": {
+      "type": "remote",
+      "url": "https://reference.langchain.com/mcp",
+      "enabled": true,
+      "timeout": 60000
+    }
+  },
+  "instructions": [
+    "AGENTS.md"
+  ],
+  // Default permissions: keep tools controlled globally, enable per agent.
+  // OpenCode docs recommend permission over legacy tools.
+  "permission": {
+    "serena_*": "allow",
+    "langchain_docs_*": "allow",
+    "depagent_references_*": "allow",
+    "webfetch": "allow",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "edit": "allow",
+    "bash": "allow",
+    "lsp": "allow",
+    "skill": "allow"
+  },
+  "tools": {
+    "serena_*": true,
+    "langchain_docs_*": true,
+    "depagent_references_*": true
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 2,
+    "reserved": 10000
+  },
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      ".venv/**",
+      "venv/**",
+      "__pycache__/**",
+      ".pytest_cache/**",
+      ".mypy_cache/**",
+      ".ruff_cache/**",
+      "node_modules/**",
+      "dist/**",
+      "build/**"
+    ]
+  }
+}

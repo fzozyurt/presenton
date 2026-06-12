@@ -175,3 +175,78 @@ def validate_memory_update(file_name: str, content: str) -> list[str]:
         )
 
     return warnings
+
+
+def validate_memory_patch(patch_text: str) -> list[str]:
+    issues: list[str] = []
+
+    if not patch_text or not patch_text.strip():
+        issues.append("Memory patch is empty")
+        return issues
+
+    forbidden_patterns = [
+        "sk-",
+        "sk_",
+        "api_key",
+        "api-key",
+        "API_KEY",
+        "password",
+        "passwd",
+        "secret",
+        "credential",
+        "authorization",
+        "bearer ",
+        "token ",
+        "auth_token",
+        "private_key",
+        "private-key",
+    ]
+    text_lower = patch_text.lower()
+    for pattern in forbidden_patterns:
+        if pattern.lower() in text_lower:
+            issues.append(
+                f"Patch may contain forbidden content (matched: '{pattern}'). "
+                f"Rejected for safety."
+            )
+
+    suspicious_markers = [
+        "uncertain",
+        "unverified",
+        "maybe",
+        "possibly",
+        "i think",
+        "i believe",
+        "it might",
+        "it could be",
+    ]
+    for marker in suspicious_markers:
+        if marker.lower() in text_lower:
+            issues.append(
+                f"Patch contains uncertain claim marker: '{marker}'. "
+                f"Certain claims only."
+            )
+
+    if len(patch_text) > 200_000:
+        issues.append(
+            f"Patch is very large ({len(patch_text)} chars). "
+            f"Likely contains raw document dump. Rejected."
+        )
+
+    import re
+
+    lines = patch_text.split("\n")
+    long_line_count = sum(1 for line in lines if len(line) > 1000)
+    if long_line_count > 5:
+        issues.append(
+            f"Patch contains {long_line_count} very long lines. "
+            f"May contain raw document content. Rejected."
+        )
+
+    email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+    ssn_pattern = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+    if re.search(email_pattern, patch_text):
+        issues.append("Patch may contain email addresses (personal data). Rejected.")
+    if re.search(ssn_pattern, patch_text):
+        issues.append("Patch may contain SSN-like patterns (personal data). Rejected.")
+
+    return issues

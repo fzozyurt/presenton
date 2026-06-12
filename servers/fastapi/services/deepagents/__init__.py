@@ -44,6 +44,11 @@ from .memory import (
     ensure_memory_seed_files,
     get_memory_seed_content,
     validate_memory_update,
+    validate_memory_patch,
+)
+from .tools import (
+    build_agent_file_context,
+    choose_deterministic_layout,
 )
 from .auto_mode import run_generate, run_memory_consolidate, run_quality_recheck
 
@@ -85,6 +90,9 @@ __all__ = [
     "ensure_memory_seed_files",
     "get_memory_seed_content",
     "validate_memory_update",
+    "validate_memory_patch",
+    "build_agent_file_context",
+    "choose_deterministic_layout",
     "run_generate",
     "run_memory_consolidate",
     "run_quality_recheck",
