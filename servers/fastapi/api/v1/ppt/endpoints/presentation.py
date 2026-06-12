@@ -7,7 +7,15 @@ import random
 import traceback
 from typing import Annotated, List, Literal, Optional, Tuple
 import dirtyjson
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    HTTPException,
+    Path,
+    Request,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,8 +94,13 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-
 PRESENTATION_ROUTER = APIRouter(prefix="/presentation", tags=["Presentation"])
+
+
+def _is_deepagents_mode() -> bool:
+    from services.deepagents.config import load_deepagents_settings
+
+    return load_deepagents_settings().is_deepagents_mode
 
 
 def _extract_custom_template_id(layout_name: Optional[str]) -> Optional[uuid.UUID]:
@@ -245,7 +258,6 @@ async def create_presentation(
     web_search: Annotated[bool, Body()] = False,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
-
     if n_slides is not None and n_slides < 1:
         raise HTTPException(
             status_code=400,
@@ -262,7 +274,7 @@ async def create_presentation(
         raise HTTPException(
             status_code=400,
             detail="Number of slides cannot be less than 3 if table of contents is included",
-    )
+        )
 
     presentation_id = uuid.uuid4()
     language_to_store = (language or "").strip()
@@ -353,7 +365,9 @@ async def prepare_presentation(
         n_toc_slides = get_no_of_toc_required_for_n_outlines(
             n_outlines=total_outlines,
             title_slide=presentation.include_title_slide,
-            target_total_slides=(presentation.n_slides if presentation.n_slides > 0 else None),
+            target_total_slides=(
+                presentation.n_slides if presentation.n_slides > 0 else None
+            ),
         )
         toc_slide_layout_index = select_toc_or_list_slide_layout_index(layout)
         _insert_toc_layouts(
@@ -597,6 +611,8 @@ async def update_presentation(
         slides=response_slides,
         fonts=fonts,
     )
+
+
 async def check_if_api_request_is_valid(
     request: GeneratePresentationRequest,
     sql_session: AsyncSession = Depends(get_async_session),
@@ -692,12 +708,10 @@ async def generate_presentation_handler(
             # Finding number of slides to generate by considering table of contents
             n_slides_to_generate = request.n_slides
             if request.include_table_of_contents and request.n_slides is not None:
-                n_slides_to_generate = (
-                    get_no_of_outlines_to_generate_for_n_slides(
-                        n_slides=request.n_slides,
-                        toc=True,
-                        title_slide=request.include_title_slide,
-                    )
+                n_slides_to_generate = get_no_of_outlines_to_generate_for_n_slides(
+                    n_slides=request.n_slides,
+                    toc=True,
+                    title_slide=request.include_title_slide,
                 )
 
             outline_messages = get_outline_messages(
@@ -741,7 +755,6 @@ async def generate_presentation_handler(
                 request.web_search,
                 request.include_table_of_contents,
             ):
-
                 if isinstance(chunk, HTTPException):
                     raise chunk
 
@@ -1051,6 +1064,40 @@ async def generate_presentation_sync(
     request: GeneratePresentationRequest,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    if _is_deepagents_mode():
+        import uuid as _uuid
+
+        from services.deepagents.config import load_deepagents_settings
+        from services.deepagents.runner import run_deepagents_presentation_generation
+
+        settings = load_deepagents_settings()
+        presentation_id = _uuid.uuid4()
+        thread_id = f"sync-{_uuid.uuid4()}"
+        user_id = getattr(request_http.state, "auth_username", None)
+
+        result = await run_deepagents_presentation_generation(
+            request=request,
+            presentation_id=str(presentation_id),
+            thread_id=thread_id,
+            user_id=user_id,
+            auto_mode=False,
+            memory_mode=settings.memory_mode,
+            export_cookie_header=_build_export_cookie_header(request_http),
+            settings=settings,
+        )
+
+        if result.status == "failed":
+            raise HTTPException(
+                status_code=500,
+                detail=result.error or "Deep Agents generation failed",
+            )
+
+        return PresentationPathAndEditPath(
+            presentation_id=presentation_id,
+            path=result.presentation_path or "",
+            edit_path=result.edit_path or f"/presentation?id={presentation_id}",
+        )
+
     try:
         (presentation_id,) = await check_if_api_request_is_valid(request, sql_session)
         return await generate_presentation_handler(
@@ -1076,6 +1123,56 @@ async def generate_presentation_async(
     background_tasks: BackgroundTasks,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    if _is_deepagents_mode():
+        import uuid as _uuid
+
+        from services.deepagents.config import load_deepagents_settings
+        from services.deepagents.jobs import (
+            _sanitize_input_snapshot,
+            create_deepagent_run,
+            run_deepagents_generation_job,
+        )
+
+        settings = load_deepagents_settings()
+        presentation_id = _uuid.uuid4()
+        thread_id = f"async-{_uuid.uuid4()}"
+        user_id = getattr(request_http.state, "auth_username", None)
+
+        input_snapshot = _sanitize_input_snapshot(request)
+        input_snapshot["thread_id"] = thread_id
+        input_snapshot["user_id"] = user_id
+        input_snapshot["auto_mode"] = False
+        input_snapshot["memory_mode"] = settings.memory_mode
+        input_snapshot["presentation_id"] = str(presentation_id)
+
+        run = await create_deepagent_run(
+            session=sql_session,
+            presentation_id=presentation_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            auto_mode=False,
+            memory_mode=settings.memory_mode,
+            input_snapshot=input_snapshot,
+        )
+
+        export_cookie = _build_export_cookie_header(request_http)
+
+        background_tasks.add_task(
+            run_deepagents_generation_job,
+            run_id=str(run.id),
+            presentation_id=str(presentation_id),
+            request_snapshot=input_snapshot,
+            export_cookie_header=export_cookie,
+            settings=settings,
+        )
+
+        task_id_str = str(run.id)
+        return AsyncPresentationGenerationTaskModel(
+            id=task_id_str,
+            status="pending",
+            message="Queued for Deep Agents generation",
+        )
+
     try:
         (presentation_id,) = await check_if_api_request_is_valid(request, sql_session)
 

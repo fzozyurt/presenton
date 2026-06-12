@@ -15,6 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models.sql.async_presentation_generation_status import (  # noqa: F401, E402
     AsyncPresentationGenerationTaskModel,
 )
+from models.sql.deepagent_presentation_run import (  # noqa: F401, E402
+    DeepAgentPresentationRunModel,
+)
 from models.sql.chat_history_message import ChatHistoryMessageModel  # noqa: F401, E402
 from models.sql.image_asset import ImageAsset  # noqa: F401, E402
 from models.sql.key_value import KeyValueSqlModel  # noqa: F401, E402
@@ -70,7 +73,9 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against the live database."""
-    configuration = dict(alembic_config.get_section(alembic_config.config_ini_section) or {})
+    configuration = dict(
+        alembic_config.get_section(alembic_config.config_ini_section) or {}
+    )
     configuration["sqlalchemy.url"] = _get_url()
 
     connectable = engine_from_config(
