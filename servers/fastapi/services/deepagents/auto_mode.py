@@ -17,11 +17,7 @@ from .jobs import (
     mark_run_completed,
     get_run_status,
 )
-from .memory import (
-    ensure_memory_seed_files,
-    get_known_memory_files,
-    get_memory_seed_content,
-)
+from .memory import get_memory_seed_content
 
 logger = logging.getLogger(__name__)
 
@@ -228,17 +224,15 @@ async def run_memory_consolidate(
             }
 
         try:
-            memories_root = settings.deepagents_mcp_url
-            seeded = await ensure_memory_seed_files(
-                memories_root="/memories",
-                memory_mode=memory_mode,
-                auto_mode=auto_mode,
-            )
             return {
                 "status": "completed",
-                "memory_files_checked": get_known_memory_files(),
-                "memory_files_created": seeded,
-                "message": "Memory consolidation completed.",
+                "memory_files_checked": [],
+                "memory_files_created": [],
+                "message": (
+                    "Memory consolidation skipped: StoreBackend-backed "
+                    "memory seeding is not yet implemented. "
+                    "Direct filesystem seeding to /memories is disabled."
+                ),
             }
         finally:
             await _release_lock(lock_key, session)

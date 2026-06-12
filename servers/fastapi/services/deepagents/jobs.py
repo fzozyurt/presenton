@@ -48,6 +48,7 @@ _VALID_STATUSES = {
     RUN_STATUS_CANCELLED,
 }
 
+
 def _sanitize_input_snapshot(request: Any) -> dict[str, Any]:
     snapshot: dict[str, Any] = {}
     for key in (
@@ -61,13 +62,17 @@ def _sanitize_input_snapshot(request: Any) -> dict[str, Any]:
         snapshot[key] = _safe_getattr(request, key, None)
 
     tone = _safe_getattr(request, "tone", None)
-    snapshot["tone"] = tone.value if hasattr(tone, "value") else str(tone) if tone else None
+    snapshot["tone"] = (
+        tone.value if hasattr(tone, "value") else str(tone) if tone else None
+    )
 
     verbosity = _safe_getattr(request, "verbosity", None)
     snapshot["verbosity"] = (
         verbosity.value
         if hasattr(verbosity, "value")
-        else str(verbosity) if verbosity else None
+        else str(verbosity)
+        if verbosity
+        else None
     )
 
     n_slides = _safe_getattr(request, "n_slides", None)
@@ -76,8 +81,29 @@ def _sanitize_input_snapshot(request: Any) -> dict[str, Any]:
     slides_markdown = _safe_getattr(request, "slides_markdown", None)
     snapshot["has_slides_markdown"] = slides_markdown is not None
 
-    files = _safe_getattr(request, "files", None)
-    snapshot["file_count"] = len(files) if files else 0
+    raw_files = _safe_getattr(request, "files", None)
+    snapshot["file_count"] = len(raw_files) if raw_files else 0
+    if raw_files:
+        from .tools import build_agent_file_context
+
+        file_dicts = []
+        for f in raw_files:
+            if isinstance(f, str):
+                from pathlib import Path
+
+                p = Path(f)
+                file_dicts.append(
+                    {
+                        "filename": p.name,
+                        "file_id": p.name,
+                        "mime_type": "application/octet-stream",
+                    }
+                )
+            else:
+                file_dicts.append(f)
+        snapshot["files"] = build_agent_file_context(file_dicts)
+    else:
+        snapshot["files"] = []
 
     return snapshot
 
@@ -108,14 +134,19 @@ async def create_deepagent_run(
         user_id=user_id,
         status=RUN_STATUS_PENDING,
         auto_mode=auto_mode,
-        memory_mode=memory_mode if memory_mode in ("off", "review", "auto") else "review",
+        memory_mode=memory_mode
+        if memory_mode in ("off", "review", "auto")
+        else "review",
         input_snapshot=input_snapshot,
     )
     session.add(run)
     await session.commit()
     await session.refresh(run)
-    logger.info("Created Deep Agent run: id=%s presentation_id=%s", run.id, presentation_id)
+    logger.info(
+        "Created Deep Agent run: id=%s presentation_id=%s", run.id, presentation_id
+    )
     return run
+
 
 async def mark_run_started(
     session: AsyncSession,
@@ -199,6 +230,7 @@ async def get_run_status(
     run = await session.get(DeepAgentPresentationRunModel, run_id)
     return run
 
+
 async def run_deepagents_generation_job(
     *,
     run_id: str,
@@ -226,9 +258,11 @@ async def run_deepagents_generation_job(
             for key, value in request_snapshot.items():
                 if key == "tone":
                     from enums.tone import Tone
+
                     setattr(snap_request, key, Tone(value) if value else Tone.DEFAULT)
                 elif key == "verbosity":
                     from enums.verbosity import Verbosity
+
                     setattr(
                         snap_request,
                         key,
@@ -264,7 +298,9 @@ async def run_deepagents_generation_job(
 
             output = result.model_dump(mode="json")
             if result.status in ("completed", "partial"):
-                final_status = "completed" if result.status == "completed" else "partial"
+                final_status = (
+                    "completed" if result.status == "completed" else "partial"
+                )
                 await mark_run_completed(session, run_uuid, output, status=final_status)
             else:
                 await mark_run_failed(
@@ -287,6 +323,4 @@ async def run_deepagents_generation_job(
                     step="failed",
                 )
             except Exception:
-                logger.exception(
-                    "Failed to mark run %s as failed", run_id
-                )
+                logger.exception("Failed to mark run %s as failed", run_id)

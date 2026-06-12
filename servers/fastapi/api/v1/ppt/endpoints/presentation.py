@@ -1064,15 +1064,14 @@ async def generate_presentation_sync(
     request: GeneratePresentationRequest,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
-    if _is_deepagents_mode():
-        import uuid as _uuid
+    (presentation_id,) = await check_if_api_request_is_valid(request, sql_session)
 
+    if _is_deepagents_mode():
         from services.deepagents.config import load_deepagents_settings
         from services.deepagents.runner import run_deepagents_presentation_generation
 
         settings = load_deepagents_settings()
-        presentation_id = _uuid.uuid4()
-        thread_id = f"sync-{_uuid.uuid4()}"
+        thread_id = f"sync-{uuid.uuid4()}"
         user_id = getattr(request_http.state, "auth_username", None)
 
         result = await run_deepagents_presentation_generation(
@@ -1092,14 +1091,22 @@ async def generate_presentation_sync(
                 detail=result.error or "Deep Agents generation failed",
             )
 
+        output_path = result.presentation_path or result.export_path
+        if not output_path:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Deep Agents generation completed but no output path was produced"
+                ),
+            )
+
         return PresentationPathAndEditPath(
             presentation_id=presentation_id,
-            path=result.presentation_path or "",
+            path=output_path,
             edit_path=result.edit_path or f"/presentation?id={presentation_id}",
         )
 
     try:
-        (presentation_id,) = await check_if_api_request_is_valid(request, sql_session)
         return await generate_presentation_handler(
             request,
             presentation_id,
@@ -1123,9 +1130,9 @@ async def generate_presentation_async(
     background_tasks: BackgroundTasks,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
-    if _is_deepagents_mode():
-        import uuid as _uuid
+    (presentation_id,) = await check_if_api_request_is_valid(request, sql_session)
 
+    if _is_deepagents_mode():
         from services.deepagents.config import load_deepagents_settings
         from services.deepagents.jobs import (
             _sanitize_input_snapshot,
@@ -1134,8 +1141,7 @@ async def generate_presentation_async(
         )
 
         settings = load_deepagents_settings()
-        presentation_id = _uuid.uuid4()
-        thread_id = f"async-{_uuid.uuid4()}"
+        thread_id = f"async-{uuid.uuid4()}"
         user_id = getattr(request_http.state, "auth_username", None)
 
         input_snapshot = _sanitize_input_snapshot(request)
@@ -1174,8 +1180,6 @@ async def generate_presentation_async(
         )
 
     try:
-        (presentation_id,) = await check_if_api_request_is_valid(request, sql_session)
-
         async_status = AsyncPresentationGenerationTaskModel(
             status="pending",
             message="Queued for generation",

@@ -5,6 +5,8 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from services.deepagents.config import DeepAgentsSettings
+
 import pytest
 
 from services.deepagents.memory import (
@@ -139,3 +141,72 @@ class TestEnsureMemorySeedFiles:
 
         result = asyncio.run(_run())
         assert result == []
+
+
+class TestRunMemoryConsolidate:
+    def test_skips_direct_filesystem_seeding(self) -> None:
+        from services.deepagents.auto_mode import run_memory_consolidate
+
+        async def _run():
+            return await run_memory_consolidate(
+                user_id=None,
+                auto_mode=True,
+                memory_mode="auto",
+                dry_run=False,
+            )
+
+        with (
+            patch(
+                "services.deepagents.auto_mode._try_acquire_lock",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "services.deepagents.auto_mode._release_lock",
+                new=AsyncMock(),
+            ),
+        ):
+            result = asyncio.run(_run())
+        assert result["status"] == "completed"
+        assert result["memory_files_checked"] == []
+        assert result["memory_files_created"] == []
+        assert "not yet implemented" in result["message"]
+
+    def test_off_mode_skips(self) -> None:
+        from services.deepagents.auto_mode import run_memory_consolidate
+
+        async def _run():
+            return await run_memory_consolidate(
+                user_id=None,
+                auto_mode=True,
+                memory_mode="off",
+            )
+
+        result = asyncio.run(_run())
+        assert result["status"] == "skipped"
+
+    def test_review_mode_skips(self) -> None:
+        from services.deepagents.auto_mode import run_memory_consolidate
+
+        async def _run():
+            return await run_memory_consolidate(
+                user_id=None,
+                auto_mode=True,
+                memory_mode="review",
+            )
+
+        result = asyncio.run(_run())
+        assert result["status"] == "skipped"
+
+    def test_dry_run_returns_without_side_effects(self) -> None:
+        from services.deepagents.auto_mode import run_memory_consolidate
+
+        async def _run():
+            return await run_memory_consolidate(
+                user_id=None,
+                auto_mode=True,
+                memory_mode="auto",
+                dry_run=True,
+            )
+
+        result = asyncio.run(_run())
+        assert result["status"] == "dry_run"

@@ -219,3 +219,15 @@ class TestBuildAgentFileContext:
 
     def test_http_url_passes_validation(self) -> None:
         _validate_path_safe("https://example.com/file.pdf")
+
+    def test_windows_absolute_path_c_drive_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Windows absolute path"):
+            _validate_path_safe("C:/Users/foo/bar.txt")
+
+    def test_windows_absolute_path_backslash_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Windows absolute path"):
+            _validate_path_safe("D:\\Users\\foo\\bar.txt")
+
+    def test_windows_absolute_path_lowercase_drive_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Windows absolute path"):
+            _validate_path_safe("e:/temp/file.pdf")

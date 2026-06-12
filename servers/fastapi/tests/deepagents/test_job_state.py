@@ -79,6 +79,24 @@ def test_sanitize_input_snapshot() -> None:
     assert snapshot["file_count"] == 2
     assert snapshot["has_slides_markdown"] is True
     assert snapshot["n_slides"] == 5
+    assert isinstance(snapshot["files"], list)
+    assert len(snapshot["files"]) == 2
+    assert snapshot["files"][0]["filename"] == "file1.pdf"
+    assert snapshot["files"][0]["safe_ref"] == "input://file1.pdf"
+    assert snapshot["files"][1]["filename"] == "file2.docx"
+    assert snapshot["files"][1]["safe_ref"] == "input://file2.docx"
+
+
+def test_sanitize_input_snapshot_no_files() -> None:
+    class _FakeRequest:
+        content = "Test"
+        files = None
+        n_slides = None
+        slides_markdown = None
+
+    snapshot = _sanitize_input_snapshot(_FakeRequest())
+    assert snapshot["file_count"] == 0
+    assert snapshot["files"] == []
 
 
 def test_create_deepagent_run() -> None:

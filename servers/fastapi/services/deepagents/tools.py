@@ -200,6 +200,13 @@ def _validate_path_safe(path: str) -> None:
         return
     if "://" in normalized:
         return
+    import re as _re
+
+    if _re.match(r"^[A-Za-z]:/", normalized):
+        raise ValueError(
+            f"Windows absolute path rejected (use a virtual path like "
+            f"/inputs/ or /workspace/): {path}"
+        )
     if normalized.startswith("/"):
         raise ValueError(f"Path outside allowed virtual boundaries: {path}")
 
