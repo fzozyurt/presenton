@@ -381,3 +381,52 @@ def get_openai_compat_image_api_key_env():
 
 def get_openai_compat_image_model_env():
     return os.getenv("OPENAI_COMPAT_IMAGE_MODEL")
+
+
+# Deep Agents feature flags
+def get_presentation_orchestrator_env():
+    return os.getenv("PRESENTATION_ORCHESTRATOR", "legacy")
+
+
+def get_deepagents_enabled_env():
+    return os.getenv("DEEPAGENTS_ENABLED")
+
+
+def is_deepagents_enabled():
+    return _is_truthy(get_deepagents_enabled_env())
+
+
+def get_deepagents_model_provider_env():
+    return os.getenv("DEEPAGENTS_MODEL_PROVIDER", "openai")
+
+
+def get_deepagents_model_name_env():
+    return os.getenv("DEEPAGENTS_MODEL_NAME", "gpt-4.1-mini")
+
+
+def get_deepagents_memory_mode_env():
+    return os.getenv("DEEPAGENTS_MEMORY_MODE", "review")
+
+
+def get_deepagents_auto_mode_env():
+    return os.getenv("DEEPAGENTS_AUTO_MODE")
+
+
+def is_deepagents_auto_mode():
+    return _is_truthy(get_deepagents_auto_mode_env())
+
+
+def get_deepagents_mcp_url_env():
+    return os.getenv("DEEPAGENTS_MCP_URL", "http://127.0.0.1:8001/mcp")
+
+
+def get_deepagents_max_retries_env():
+    return os.getenv("DEEPAGENTS_MAX_RETRIES", "2")
+
+
+def get_deepagents_max_qa_loops_env():
+    return os.getenv("DEEPAGENTS_MAX_QA_LOOPS", "1")
+
+
+def get_deepagents_run_timeout_seconds_env():
+    return os.getenv("DEEPAGENTS_RUN_TIMEOUT_SECONDS", "900")
